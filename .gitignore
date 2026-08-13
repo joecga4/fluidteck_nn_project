@@ -1,0 +1,49 @@
+# ---------------------------------------------------------------------------
+# Python
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# ---------------------------------------------------------------------------
+# Secuencias de excitacion: REGENERABLES, y pesan 13 MB cada una.
+# Se reproducen exactamente con la semilla:
+#     python tools/gen_excitacion.py --seed 1 --etiqueta train
+#     python tools/gen_excitacion.py --seed 7 --etiqueta val
+# Lo que SI se versiona son los parametros con que se generaron: viven en el
+# propio codigo y en CLAUDE.md.
+# ---------------------------------------------------------------------------
+results/excitacion_*.csv
+
+# ---------------------------------------------------------------------------
+# Capturas del equipo. Son datos medidos e IRREEMPLAZABLES, pero pueden pesar
+# cientos de MB. Si crecen, Git LFS o un almacen aparte; mientras tanto no
+# entran por accidente.
+#   NO se ignora results/caracterizacion_*.csv: son pocos kB y es la medida
+#   sobre la que se apoya todo el modelo.
+# ---------------------------------------------------------------------------
+results/captura_*.csv
+
+# ---------------------------------------------------------------------------
+# Material original del laboratorio: 195 MB entre bases de datos Access, .lvm
+# de respaldo, capturas de pantalla y VIs binarios. GitHub no es el sitio para
+# eso, y el proyecto no depende de ello: lo que hacia falta de esos datos ya
+# esta extraido y analizado en CLAUDE.md §5.1.
+# ---------------------------------------------------------------------------
+labview/
+
+# ---------------------------------------------------------------------------
+# docs/: la memoria de Fluidtek (15 MB) es un documento de ingenieria de un
+# TERCERO, entregado al laboratorio. No se publica por defecto. Todo lo que el
+# proyecto necesita de ella esta extraido en CLAUDE.md §2 y §3.
+# Si el repositorio es privado y hay derecho a incluirla, quitar esta linea.
+# ---------------------------------------------------------------------------
+docs/*.pdf
+
+# Ruido del sistema
+Thumbs.db
+desktop.ini
+
+# Ajustes locales de Claude Code (permisos de esta maquina, no del proyecto)
+.claude/settings.local.json
