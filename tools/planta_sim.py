@@ -183,7 +183,12 @@ class ParamsPlanta:
     # con R2 ~ 0.999 y sin meseta). Por eso `solape` se deja en 0.
 
     # --- Cadena de mando --------------------------------------------------
-    K_amp: float = 0.003         # [A/V] (!) ganancia del amplificador
+    # AJUSTE REAL DEL AMPLIFICADOR, confirmado por el laboratorio (2026-08-13):
+    # 10 V -> 40 mA. La memoria daba 0.003 A/V (30 mA a 10 V) y esta
+    # desactualizada. El valor real encaja EXACTAMENTE con la corriente nominal
+    # de la valvula (codigo L: +-40 mA single/paralelo), asi que el fondo de
+    # escala del AO corresponde al 100 % del recorrido del carrete, no al 75 %.
+    K_amp: float = 0.004         # [A/V]
     u_max: float = 10.0          # [V]   rango del AO (NI 9263)
 
     # --- Circuito ---------------------------------------------------------

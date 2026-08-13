@@ -102,10 +102,10 @@ es `..F`. Además el dato del catálogo se mide a **210 bar de pilotaje** y aqu�
 > dos ramas lineales con R² ≈ 0.999 y **sin meseta** (§5.3b). La estimación inicial de una
 > «zona muerta de 0.24 V» era incompatible con el hardware, además de con los datos.
 
-> ⚠ **`±40 mA` o `±20 mA` según el conexionado, y no es un detalle.** El código `L` admite
-> las dos. La ganancia medida (**0.446 mm/s·V**) encaja con **±40 mA** —el modelo predice
-> 0.377— y no con ±20 mA, que daría 0.755. Se adopta el paralelo/single. **Confirmar mirando
-> el cableado del amplificador**, porque de aquí cuelga toda la escala del comando.
+> ✅ **Conexionado resuelto: single/paralelo, ±40 mA.** El código `L` admite ±40 mA
+> (single/paralelo) o ±20 mA (serie), y no es un detalle: de ahí cuelga toda la escala del
+> comando. Lo zanja el ajuste del amplificador, **10 V → 40 mA** (§2.4): coincide con el
+> valor single/paralelo, así que **fondo de escala del AO = 100 % del carrete**.
 
 **Deriva de null por temperatura — cierra un cabo que teníamos suelto.** La especificación
 de ≤ 2 % por ΔT = 55 °C, con `±10 V ↔ ±40 mA`, son **0.20 V de comando por cada 55 °C**.
@@ -180,11 +180,13 @@ lazo abierto por bien que se mida (§5.3c2).
 > ⚠ La carrera de 150 mm **contradice** el modelo `RH-M0400M` (400 mm) que cita la memoria.
 > Manda el dato del laboratorio; queda anotado como una discrepancia más de la memoria (§8).
 
-- **Amplificador de la servoválvula:** convierte **±10 V → ±100 mA** (capacidad); en el
-  modelo se usa `K_amp = 0.003 A/V`. Con la válvula real (±40 mA para el 100 % de carrera,
-  §2.2) eso significa que **±10 V solo alcanzan el 75 % del recorrido del carrete**.
-  **Verificar el ajuste real del amplificador**: este número fija toda la ganancia del lazo
-  y es el candidato principal para el 18 % que aún separa modelo y medida.
+- **Amplificador de la servoválvula — ajuste real: `±10 V → ±40 mA`**, confirmado por el
+  laboratorio el 2026-08-13. Es decir **`K_amp = 0.004 A/V`**; la memoria daba 0.003 A/V
+  (30 mA a 10 V) y está desactualizada.
+
+  > Coincide **exactamente** con la corriente nominal de la válvula (código `L`: ±40 mA
+  > single/paralelo, §2.2). O sea: **el fondo de escala del AO corresponde al 100 % del
+  > recorrido del carrete**, ni de más ni de menos. La cadena está bien dimensionada.
 
 ### 2.5 Adquisición y cómputo
 | Módulo | Descripción |
@@ -349,7 +351,8 @@ la estabilidad viene del lazo. Los límites de seguridad del §6.3 no son burocr
 | Diseño de la secuencia de excitación (`tools/gen_excitacion.py`) | 2026-08-12 | ✅ | APRBS multinivel con signo + plegado dentro de la ventana segura (§6.2) |
 | Capa de E/S y diagnóstico (`tools/daq.py`) | 2026-08-12 | ✅ | `--diag` sin mover la planta; captura AO+AI con trigger común |
 | Maniobras de máquina: `--hpu`, `--caracteriza`, `--jog` + protocolo de Fase 0 | 2026-08-12 | ✅ | `--armar` obligatorio; el puerto DO se escribe entero para sostener el permisivo |
-| **Servoválvula identificada por catálogo** (G761-3001B H04JOFM4VPL) | 2026-08-13 | ✅ | 4 L/min · ±40 mA · **120 Hz** · zero lap; el modelo pasa de errar 1.65× a **18 %** (§2.2) |
+| **Servoválvula identificada por catálogo** (G761-3001B H04JOFM4VPL) | 2026-08-13 | ✅ | 4 L/min · ±40 mA · **120 Hz** · zero lap (§2.2) |
+| **Cadena de mando cerrada**: amplificador real 10 V → 40 mA | 2026-08-13 | ✅ | `K_amp = 0.004 A/V`; el modelo predice **0.503** vs **0.446** medido: **+13 %**, dentro de la tolerancia del fabricante (§8) |
 | **Escala de presión calibrada por dos puntos** | 2026-08-12 | ✅ | balance de fuerzas de −141 kN a **+0.8 kN**; `P_B/P_A = 1.667` vs `A_A/A_B = 1.641` (§5.3c) |
 | **Primer arranque de la UPH desde Python** | 2026-08-12 | ✅ | DO line0 = marcha · DO line5 = permisivo · DI line7 = motor encendido; **K₊ = 0.446 / K₋ = 0.378 mm/s·V**, asimetría medida **0.847** vs 0.772 del modelo; deriva **8.4 mm/min** (§5.3) |
 | **Fase 0 (parcial): línea base de los 4 sensores en el equipo real** | 2026-08-12 | ✅ | celda y presiones **concuerdan** en fuerza; ruido de modo común a 133.8 Hz; σ_posición = 0.28 mm ⇒ límite de medida de velocidad (§5.2) |
@@ -823,10 +826,19 @@ llegaron) · `tools/` (Python del host) · `results/` (datos y figuras del infor
   100/400 bar** (no 0–10 V / 160 bar), **cilindro asimétrico** (no simétrico con
   `A_p = 122.52 cm²`), y el uso de `K_ce` como fuga (§5.4). Quedan por confirmar: `K_amp`,
   la presión de trabajo real, el Ts del lazo y el estado del ajuste de null.
-- [x] ~~**Discrepancia de ganancia de 6.5×**~~ — **cerrada** (§5.3b2): medido
-  **0.545 mm/s·V** en el equipo, frente a 0.902 del modelo (factor 1.65, razonable para
-  parámetros de catálogo). El «6.5×» era un artefacto del `Ts` supuesto para los ficheros
-  de 2017, que no llevan columna de tiempo.
+- [x] ~~**Discrepancia de ganancia**~~ — **cerrada del todo** (§5.4). Recorrido completo:
+
+  | Modelo | Predice | vs medido (0.446 mm/s·V) |
+  |---|---|---|
+  | Memoria: cilindro simétrico, 4.78 L/min, 150 Hz | — | **factor 6.5×** |
+  | + dos cámaras asimétricas | 0.902 | factor 1.65× |
+  | + catálogo de la válvula (4 L/min, ±40 mA) | 0.377 | −15 % |
+  | **+ amplificador real (10 V → 40 mA)** | **0.503** | **+13 %** |
+
+  El 13 % restante cae **dentro de la tolerancia de caudal del propio fabricante (±10 %)**,
+  sin contar la presión de suministro real, el coeficiente de descarga ni la viscosidad del
+  aceite. **El modelo físico ya no tiene ningún error estructural pendiente**; lo que queda
+  es incertidumbre de parámetros, que es lo que la red va a aprender de los datos.
 - **Offset de null grande (≈ −0.3 V) y deriva de 8.4 mm/min a comando cero** (§5.3b): el
   punto de trabajo de los ensayos normados está pegado al cruce por cero y a caballo del
   cambio de rama. Es la dificultad central del proyecto y su principal justificación. La primera medida
