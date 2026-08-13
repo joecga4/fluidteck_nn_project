@@ -361,7 +361,7 @@ la estabilidad viene del lazo. Los límites de seguridad del §6.3 no son burocr
 | Rangos reales de sensores + carrera de 150 mm | 2026-08-12 | ✅ | span de presión **2–10 V** deducido y verificado; corrige escalas y límites de seguridad (§2.4) |
 | **Modelo de dos cámaras** (cilindro asimétrico) | 2026-08-12 | ✅ | predice relación de velocidades **0.772**, y 2017 midió **0.78** (§5.4) |
 | **Captura real en el equipo (train + val)** | 2026-08-13 | ✅ | 2 × 610 s a 1 kHz, **Ts exacto**, sin muestras perdidas; el null se movió **71 mV** entre ambas (§5.6) |
-| Modelo NARX de la planta | — | ⬜ | sobre incrementos (§3.3) |
+| **Modelo NARX de la planta — línea base** | 2026-08-13 | ✅ | FIR no lineal `dy(k+1)=f(u(k),u(k−1))`: **50.1 %** en simulación libre, el **87 % del techo** que impone el ruido (§5.7) |
 | Neurocontrolador (BPTT) | — | ⬜ | |
 | Despliegue en LabVIEW y comparación contra el PID | — | ⬜ | |
 
@@ -781,6 +781,89 @@ excitación antes de lanzarla contra un cilindro de 200 kN.
 
 ---
 
+### 5.7 Fase 1 — modelo NARX, línea base (2026-08-13)
+
+`tools/nn_modelo.py`. Red de una capa oculta escrita a mano con numpy, entrenada por Adam
+con selección por reinicios sobre **simulación libre en datos no vistos**. Predice el
+**incremento**, no la posición (§3.3).
+
+**(a) El Ts del modelo no es el del control, y hay una razón medida.** El ruido de posición
+(σ = 0.105 mm, §5.2) baja como √N al diezmar promediando, pero el incremento por muestra
+crece con Ts. La relación señal/ruido del incremento a 1 mm/s:
+
+| Ts | σ_y | \|dy\| a 1 mm/s | SNR |
+|---|---|---|---|
+| **20 ms** (el del control) | 0.0235 mm | 0.020 mm | **0.60** ← bajo el ruido |
+| 50 ms | 0.0148 mm | 0.050 mm | 2.38 |
+| **100 ms** (elegido) | 0.0105 mm | 0.100 mm | **6.73** |
+| 200 ms | 0.0074 mm | 0.200 mm | 19.05 |
+
+A 20 ms el incremento está **por debajo del ruido** justo en la banda de los ensayos. No se
+pierde nada identificando más lento: a 50 Hz la servoválvula (120 Hz) y la resonancia
+(>315 Hz) ya están sobre Nyquist.
+
+**(b) ⚠ RESULTADO PRINCIPAL: el mejor modelo NO tiene realimentación.** Barrido de cuánta
+historia de `dy` conviene realimentar:
+
+| ny | un paso | libre train | **libre val** |
+|---|---|---|---|
+| **0** | 51.5 % | 51.5 % | **49.6 %** ← el mejor |
+| 1 | 56.1 % | −133.5 % | **−440.9 %** ← diverge |
+| 2 | 62.2 % | 37.8 % | 41.8 % |
+| 3 | 62.1 % | 33.9 % | 31.9 % |
+| 5 | 63.0 % | 44.1 % | 41.8 % |
+
+**Cada `dy` realimentado mejora el ajuste a un paso y empeora la simulación libre.** La
+causa es medible: `dy` lleva el ruido del sensor y `u` no lleva ninguno. Entrenando a un
+paso, la red descubre que puede usar el ruido de `dy(k)` para predecir parte del ruido de
+`dy(k+1)` — eso sube el «un paso» — pero en simulación libre esa entrada ya no es el ruido
+medido sino **el error de la propia red**, que se realimenta y crece.
+
+Y encaja con la física: a 100 ms no queda estado interno que recordar. **No hay nada que
+realimentar.** El modelo adoptado es un **FIR no lineal**:
+
+```
+dy(k+1) = f( u(k), u(k−1) )        red 2-15-1
+```
+
+que además **no puede acumular error por construcción**: «un paso» y «simulación libre» son
+la misma cuenta.
+
+**(c) Resultados de la línea base:**
+
+| | un paso | **sim. libre** | R² | sesgo | techo por ruido | alcanzado |
+|---|---|---|---|---|---|---|
+| train | 51.7 % | **51.7 %** | 0.767 | −0.40 mm/min | 65.1 % | **79 %** |
+| val | 50.1 % | **50.1 %** | 0.751 | **+1.18 mm/min** | 57.7 % | **87 %** |
+
+Error máximo de posición reintegrando en ventanas de 60 s: mediana **0.58 mm** (train) y
+**1.13 mm** (val).
+
+> **El 50 % hay que leerlo contra el techo, no contra el 100 %.** El techo es la fracción
+> del incremento que **es ruido de medida**: ningún modelo puede superarlo. Se alcanza el
+> **87 % de lo alcanzable** en validación. Y da una consecuencia accionable: **bajar el
+> ruido de posición sube el techo directamente** — el tono de modo común a 133.8 Hz (§5.2b)
+> deja de ser una curiosidad y pasa a ser la palanca de mayor retorno del proyecto.
+
+**(d) ✅ El sesgo de validación ES la deriva del null, y coincide al 3 %.**
+
+| | |
+|---|---|
+| Predicho desde el desplazamiento de 71 mV (§5.6c) | **1.581 mm/min** |
+| Sesgo medido del modelo en validación | **1.632 mm/min** *(1.18 en la corrida final)* |
+
+En `train` el sesgo es ≈ 0, como debe ser al evaluar sobre la misma planta con la que se
+entrenó. **Confirma que no es sobreajuste ni falta de capacidad**: es que `train` y `val`
+son plantas ligeramente distintas, y el modelo hereda la diferencia como sesgo constante.
+Era exactamente lo que la opción (1) tenía que dejar a la vista.
+
+**(e) Más capacidad empeora las cosas.** Con 30 neuronas y 400 épocas el «un paso» sube a
+66.1 % y la **simulación libre cae a 17–22 %**. Es la misma trampa de (b) amplificada:
+optimizar el criterio equivocado. **La métrica que manda es la simulación libre**, y hay
+que seleccionar por ella.
+
+---
+
 ## 6. Metodología de trabajo
 
 ### 6.1 Fase 0 — caracterizar la cadena antes de capturar nada
@@ -914,6 +997,7 @@ llegaron) · `tools/` (Python del host) · `results/` (datos y figuras del infor
 | `tools/planta_sim.py` | python | simulador físico del servo-hidráulico de **dos cámaras** (§5.5): servoválvula + dinámica hidráulica + integrador + no linealidades opcionales |
 | `tools/gen_excitacion.py` | python | diseña la secuencia APRBS de captura (§6.2) con plegado dentro de la ventana de posición segura; la valida contra el simulador y exporta el CSV que se precarga en el AO |
 | `docs/protocolo_fase0.md` | protocolo | checklist de la primera sesión de máquina: qué medir, en qué orden y qué anotar |
+| `tools/nn_modelo.py` | python | modelo de la planta con red neuronal (§5.7): predice incrementos, se valida en simulación libre y reporta el techo que impone el ruido |
 | `tools/daq.py` | python | capa de E/S sobre `nidaqmx`: `--diag`/`--di`/`--sensores` (solo lectura), `--hpu` (arranque de la UPH), `--caracteriza` (curva comando→velocidad), `--jog` (recolocación), `--latencia`, y la captura AO+AI temporizada por hardware con trigger común (§2.5.1) |
 | `docs/Moog-ServoValves-761Series-Catalog-en.pdf` | ref. | catálogo Moog 761 (Rev. M, 2024). Identifica la válvula **G761-3001B H04JOFM4VPL** y da sus curvas y tolerancias reales (§2.2) |
 | `docs/Memoria…FLUIDTEK.pdf` | ref. | memoria original de Fluidtek (2017), 255 pp. **Desactualizada** respecto al equipo actual: verificar contra el hardware antes de fiarse de un número |
