@@ -91,7 +91,7 @@ import numpy as np
 try:
     import nidaqmx
     from nidaqmx.constants import (AcquisitionType, Edge, LineGrouping,
-                                   RegenerationMode, TerminalConfiguration)
+                                   RegenerationMode, TaskMode, TerminalConfiguration)
     from nidaqmx.system import System
 except ImportError:  # pragma: no cover
     print("ERROR: falta el paquete `nidaqmx`.  ->  python -m pip install nidaqmx")
@@ -228,11 +228,24 @@ DO_MARCHA = _patron_do(True)      # permisivo alto, UPH en marcha
 DI_ESPERADO_REPOSO = {0: 1, 1: 1, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0}
 
 # Limites de seguridad por software. Estrictamente interiores a los mecanicos.
-X_MIN_SEG = 20.0          # [mm] carrera util real del actuador: 0..150
+# Dos ventanas distintas, y la diferencia importa:
+#   * VENTANA DE TRABAJO [X_MIN_SEG, X_MAX_SEG]: la que se exige para EMPEZAR
+#     una captura y la que se vigila durante la emision de la excitacion.
+#   * LIMITES MECANICOS [X_MIN_JOG, X_MAX_JOG]: margen respecto a los topes
+#     reales (0 y 150 mm). Son los que aplican durante una RECOLOCACION.
+# Usar la ventana de trabajo tambien para el jog es un error: impide la unica
+# maniobra que sirve para volver a entrar en ella. Se comprobo con el vastago
+# parado en 5.2 mm — abortaba antes de moverse.
+X_MIN_SEG = 20.0          # [mm] ventana de trabajo
 X_MAX_SEG = 130.0         # [mm]
+X_MIN_JOG = 4.0           # [mm] limites mecanicos con margen (carrera 0..150)
+X_MAX_JOG = 146.0         # [mm]
 F_MAX_SEG = 50.0          # [kN] muy por debajo de los 200 kN de la celda
-PA_MAX_SEG = 110.0        # [bar] camara A: la limitadora esta a 100 bar
-PB_MAX_SEG = 200.0        # [bar] camara B: admite intensificacion (164 bar a 100 en A)
+# Limites de presion, revisados tras calibrar las escalas (§5.3c). El fondo de
+# escala real de cada canal es 259.3 bar (A) y 145.7 bar (B), asi que un limite
+# de 200 bar en B seria un chequeo MUERTO: el canal satura antes de alcanzarlo.
+PA_MAX_SEG = 110.0        # [bar] camara A: por encima de la limitadora (100 bar)
+PB_MAX_SEG = 130.0        # [bar] camara B: por debajo de su saturacion (145.7)
 U_MAX_SEG = 10.0          # [V]  rango del NI 9263
 
 
@@ -387,7 +400,8 @@ def mide_latencia(mods: dict, n: int = 2000, fs_obj: float = 100.0) -> None:
     print(f"\nMEDIDA DEL LAZO DE SOFTWARE ({n} iteraciones, objetivo {fs_obj:.0f} Hz)")
     print("  (el AO se mantiene a 0.000 V: la planta no se mueve)")
     Ts = 1.0 / fs_obj
-    dt = np.empty(n)
+    t_rd = np.empty(n)
+    t_wr = np.empty(n)
 
     with nidaqmx.Task() as tao, nidaqmx.Task() as tai:
         tao.ao_channels.add_ao_voltage_chan(_ao_chan(mods), min_val=-10.0, max_val=10.0)
@@ -395,30 +409,48 @@ def mide_latencia(mods: dict, n: int = 2000, fs_obj: float = 100.0) -> None:
             _ai_chan(mods, "ai0"), min_val=-10.0, max_val=10.0,
             terminal_config=TerminalConfiguration.DIFF,
         )
-        tao.write(0.0, auto_start=True)
+        # CLAVE: COMMIT + START explicitos, y una sola vez.
+        # Si la tarea se deja sin arrancar, DAQmx hace un start/stop implicito
+        # EN CADA read(), y sobre un chasis Ethernet eso cuesta ~200 ms por
+        # iteracion. Medido: 202 ms de mediana sin esto. Con COMMIT la tarea
+        # queda preprogramada en el hardware y cada operacion es solo la
+        # transferencia.
+        tai.control(TaskMode.TASK_COMMIT)
+        tao.control(TaskMode.TASK_COMMIT)
+        tai.start()
+        tao.start()
+        tao.write(0.0)
+
         objetivo = time.perf_counter()
         for k in range(n):
             objetivo += Ts
             t0 = time.perf_counter()
-            tai.read()               # leer la medida
-            tao.write(0.0)           # escribir la accion
-            dt[k] = time.perf_counter() - t0
+            tai.read()                          # leer la medida
+            t1 = time.perf_counter()
+            tao.write(0.0)                      # escribir la accion
+            t2 = time.perf_counter()
+            t_rd[k], t_wr[k] = t1 - t0, t2 - t1
             espera = objetivo - time.perf_counter()
             if espera > 0:
                 time.sleep(espera)
         tao.write(0.0)
+        tao.stop()
+        tai.stop()
 
-    dt_ms = dt * 1e3
-    print(f"  tiempo de una iteracion (leer + escribir):")
-    print(f"    min {dt_ms.min():7.3f} ms   mediana {np.median(dt_ms):7.3f} ms")
-    print(f"    p95 {np.percentile(dt_ms,95):7.3f} ms   max     {dt_ms.max():7.3f} ms")
-    print(f"    desviacion {dt_ms.std():7.3f} ms")
-    Ts_min = np.percentile(dt_ms, 99) * 2
-    print(f"\n  -> Ts de control recomendado: >= {Ts_min:.1f} ms "
-          f"({1000/Ts_min:.0f} Hz), dejando el 50% del periodo para el calculo.")
-    print("     Anotar este numero en CLAUDE.md §6.1: es el que justifica el Ts")
-    print("     elegido para el lazo, y el retardo puro que hay que meter en el")
-    print("     modelo NARX.")
+    tot = (t_rd + t_wr) * 1e3
+    print(f"\n  {'':14s} {'min':>9s} {'mediana':>9s} {'p95':>9s} {'max':>9s}")
+    for nom, v in (("lectura AI", t_rd * 1e3), ("escritura AO", t_wr * 1e3),
+                   ("TOTAL", tot)):
+        print(f"  {nom:14s} {v.min():9.3f} {np.median(v):9.3f} "
+              f"{np.percentile(v,95):9.3f} {v.max():9.3f}   ms")
+    print(f"  desviacion del total: {tot.std():.3f} ms")
+
+    Ts_min = np.percentile(tot, 99) * 2
+    print(f"\n  -> Ts de control alcanzable: >= {Ts_min:.1f} ms "
+          f"({1000/Ts_min:.0f} Hz), dejando la mitad del periodo para el calculo.")
+    print("     Es tambien el RETARDO PURO que hay que meter en el modelo NARX:")
+    print("     un retardo de transporte no modelado se le aparece a la red como")
+    print("     dinamica falsa. Anotar en CLAUDE.md §6.1.")
 
 
 # ============================================================================
@@ -709,9 +741,10 @@ def _lee_estado(tai) -> dict:
             for i, c in enumerate(CANALES_AI.values())}
 
 
-def _comprueba_limites(e: dict) -> str | None:
-    if not (X_MIN_SEG <= e["posicion"] <= X_MAX_SEG):
-        return f"posicion {e['posicion']:.1f} mm fuera de [{X_MIN_SEG}, {X_MAX_SEG}]"
+def _comprueba_limites(e: dict, x_lo: float = X_MIN_SEG,
+                       x_hi: float = X_MAX_SEG) -> str | None:
+    if not (x_lo <= e["posicion"] <= x_hi):
+        return f"posicion {e['posicion']:.1f} mm fuera de [{x_lo}, {x_hi}]"
     if abs(e["fuerza"]) > F_MAX_SEG:
         return f"fuerza {e['fuerza']:.1f} kN > {F_MAX_SEG}"
     if e["presion_A"] > PA_MAX_SEG:
@@ -790,7 +823,9 @@ def _recoloca(tao, tai, destino: float, signo: float, u_max_jog: float = 1.0,
     t0 = time.perf_counter()
     while time.perf_counter() - t0 < t_max:
         e = _lee_estado(tai)
-        fallo = _comprueba_limites(e)
+        # Durante la recolocacion mandan los limites MECANICOS, no la ventana de
+        # trabajo: el objetivo del jog es precisamente volver a entrar en ella.
+        fallo = _comprueba_limites(e, X_MIN_JOG, X_MAX_JOG)
         if fallo:
             tao.write(0.0)
             print(f"\n  !! ABORTA recolocacion: {fallo}")
@@ -944,8 +979,8 @@ def caracteriza(mods: dict, u_lista=None, t_paso: float = 2.5,
         print("     y anotar el resultado en CLAUDE.md §5 (cierra la discrepancia de 6x).")
 
 
-def jog(mods: dict, destino: float, u_max_jog: float = 1.0, tol: float = 0.5,
-        t_max: float = 60.0, armar: bool = False) -> None:
+def jog(mods: dict, destino: float, u_max_jog: float = 2.0, tol: float = 1.0,
+        t_max: float = 240.0, armar: bool = False) -> None:
     """Lleva el vastago a `destino` [mm] con un lazo P lento y acotado.
 
     Sirve para RECOLOCAR antes de una captura (ahora mismo el vastago esta
@@ -1243,8 +1278,9 @@ def main() -> None:
     if hay_maniobra and args.con_hpu and args.armar:
         with PuertoDO(mods) as do:
             do.hpu(True)
-            print("  esperando 3 s a que se estabilice la presion...")
-            time.sleep(3.0)
+            print("  esperando 12 s a que se estabilice la presion...")
+            print("  (los primeros segundos tras arrancar la bomba no son fiables: §5.3b)")
+            time.sleep(12.0)
             try:
                 _maniobras()
             finally:

@@ -352,6 +352,7 @@ la estabilidad viene del lazo. Los límites de seguridad del §6.3 no son burocr
 | Capa de E/S y diagnóstico (`tools/daq.py`) | 2026-08-12 | ✅ | `--diag` sin mover la planta; captura AO+AI con trigger común |
 | Maniobras de máquina: `--hpu`, `--caracteriza`, `--jog` + protocolo de Fase 0 | 2026-08-12 | ✅ | `--armar` obligatorio; el puerto DO se escribe entero para sostener el permisivo |
 | **Servoválvula identificada por catálogo** (G761-3001B H04JOFM4VPL) | 2026-08-13 | ✅ | 4 L/min · ±40 mA · **120 Hz** · zero lap (§2.2) |
+| **Latencia del lazo medida**: 5.46 ms mediana ⇒ **Ts = 20 ms (50 Hz)** | 2026-08-13 | ✅ | el primer valor (202 ms) era un start/stop implícito por tarea sin arrancar (§6.1) |
 | **Cadena de mando cerrada**: amplificador real 10 V → 40 mA | 2026-08-13 | ✅ | `K_amp = 0.004 A/V`; el modelo predice **0.503** vs **0.446** medido: **+13 %**, dentro de la tolerancia del fabricante (§8) |
 | **Escala de presión calibrada por dos puntos** | 2026-08-12 | ✅ | balance de fuerzas de −141 kN a **+0.8 kN**; `P_B/P_A = 1.667` vs `A_A/A_B = 1.641` (§5.3c) |
 | **Primer arranque de la UPH desde Python** | 2026-08-12 | ✅ | DO line0 = marcha · DO line5 = permisivo · DI line7 = motor encendido; **K₊ = 0.446 / K₋ = 0.378 mm/s·V**, asimetría medida **0.847** vs 0.772 del modelo; deriva **8.4 mm/min** (§5.3) |
@@ -359,7 +360,7 @@ la estabilidad viene del lazo. Los límites de seguridad del §6.3 no son burocr
 | Mapeo de canales AI confirmado por el laboratorio | 2026-08-12 | ✅ | ai0 posición · ai1 celda · ai2/ai3 **las dos cámaras** (§2.5.1) |
 | Rangos reales de sensores + carrera de 150 mm | 2026-08-12 | ✅ | span de presión **2–10 V** deducido y verificado; corrige escalas y límites de seguridad (§2.4) |
 | **Modelo de dos cámaras** (cilindro asimétrico) | 2026-08-12 | ✅ | predice relación de velocidades **0.772**, y 2017 midió **0.78** (§5.4) |
-| Captura real en el equipo (train + val) | — | ⬜ | pendiente de tiempo de máquina |
+| **Captura real en el equipo (train + val)** | 2026-08-13 | ✅ | 2 × 610 s a 1 kHz, **Ts exacto**, sin muestras perdidas; el null se movió **71 mV** entre ambas (§5.6) |
 | Modelo NARX de la planta | — | ⬜ | sobre incrementos (§3.3) |
 | Neurocontrolador (BPTT) | — | ⬜ | |
 | Despliegue en LabVIEW y comparación contra el PID | — | ⬜ | |
@@ -681,6 +682,89 @@ agrupa la fuga real *más* la pendiente `dQ/dP` de la propia servoválvula. En u
 lineal esa pendiente **ya la aporta la ecuación de orificio**, así que meter `K_ce` la cuenta
 dos veces. Con `K_fuga = 0` el simulador reproduce exactamente la solución analítica.
 
+### 5.6 Captura de identificación — ✅ hecha el 2026-08-13
+
+Dos secuencias **independientes** (semillas 1 y 7), en la **misma sesión**, sin probeta,
+emitidas con temporización por hardware:
+
+| | `train` | `val` |
+|---|---|---|
+| Muestras / duración | 609 543 / 609.5 s | 612 094 / 612.1 s |
+| **Ts (mín – máx)** | **1.0000 – 1.0000 ms** | **1.0000 – 1.0000 ms** |
+| Recorrido | 71.6 – 99.4 mm | 42.9 – 77.0 mm |
+| Comando | −9.95 … +8.43 V | −10.00 … +5.72 V |
+
+**El `Ts` sale exacto hasta la última cifra**, mínimo y máximo idénticos. Es lo que da el
+reloj del chasis y lo que ningún lazo de software puede garantizar (§2.5.1). Se emitieron
+609 mil muestras sin perder ninguna y sin que saltara ningún límite.
+
+**(a) La captura reproduce el barrido — validación cruzada con otra excitación.**
+Ajustando la curva estática sobre los tramos de régimen de la propia captura:
+
+| | captura APRBS | barrido de escalones | dif. |
+|---|---|---|---|
+| K⁺ | 0.4340 | 0.4459 | −2.7 % |
+| K⁻ | 0.3766 | 0.3779 | −0.3 % |
+
+R² = 0.999 en ambas ramas. Dos excitaciones de diseño completamente distinto dan la misma
+planta.
+
+**(b) Las dos capturas coinciden entre sí.**
+
+| | `train` | `val` | dif. |
+|---|---|---|---|
+| K⁺ | 0.4340 | 0.4338 | −0.1 % |
+| K⁻ | 0.3766 | 0.3711 | −1.5 % |
+
+**(c) ⚠⚠ EL NULL SE MOVIÓ 71 mV ENTRE LAS DOS CAPTURAS — en diez minutos.**
+
+| | |
+|---|---|
+| Comando de velocidad nula, `train` | **−0.356 V** |
+| Comando de velocidad nula, `val` | **−0.285 V** |
+| Desplazamiento | **+71 mV** ⇒ **1.58 mm/min** |
+
+Son **~20 °C de aceite** según la especificación de Moog (0.20 V por 55 °C, §2.2) — un
+calentamiento normal en una sesión con la bomba en marcha. Y en velocidad significa:
+
+| Ensayo | consigna | la deriva del null es |
+|---|---|---|
+| Losa | 1.5 mm/min | **1.1× la consigna entera** |
+| Viga | 0.1 mm/min | **16× la consigna** |
+
+**En diez minutos de operación el punto de velocidad cero se movió más que la consigna
+completa del ensayo de losa.** Tres consecuencias, y hay que tenerlas presentes al entrenar:
+
+1. **`train` y `val` tienen nulls distintos.** Un NARX que aprenda la relación *absoluta*
+   `u → velocidad` verá las dos series como incoherentes y promediará: el error de
+   validación no bajará de ahí por mucho que crezca la red. No es sobreajuste, es que **las
+   dos series describen plantas ligeramente distintas**.
+2. **El modelo no debe apoyarse en un null absoluto.** Predecir incrementos (§3.3) ayuda
+   pero no basta: el término independiente sigue estando. Opciones: meter la **temperatura
+   del aceite** como entrada del regresor, o aceptar que el sesgo lo corrige el integrador
+   del lazo.
+3. **Refuerza la ley mixta PID+red** como hipótesis: la red aporta la anticipación y el
+   integrador absorbe una deriva que **ningún modelo estático puede seguir**.
+
+Y confirma con números la regla de §6.4: **comparar leyes de control en sesiones distintas
+no tiene sentido en esta planta.**
+
+**(d) Tercera validación de las presiones**, ahora sobre 610 s de movimiento:
+
+| | |
+|---|---|
+| `P_A·A_A − P_B·A_B` (media) | −1.408 kN |
+| Peso del conjunto móvil (~178 kg) | +1.75 kN |
+| **Suma** | **+0.34 kN** |
+| Celda de carga | −0.089 kN |
+
+Los dos términos grandes casi se cancelan, como deben: a velocidades modestas y sin
+aceleraciones grandes la fuerza neta ronda cero. El residuo es fricción de sellos. La celda
+marca ~0 porque **sin probeta no hay reacción externa que medir**.
+
+Ficheros: `results/captura_{train,val}.csv` · figura `results/captura_train.png`.
+⚠ Los CSV pesan ~40 MB cada uno y **no se versionan** (ver `.gitignore`).
+
 ### 5.5 Simulador físico — `tools/planta_sim.py`
 Implementa §3 en espacio de estados discreto para poder desarrollar y validar **todo el
 pipeline de redes antes de gastar tiempo de máquina**:
@@ -710,6 +794,33 @@ excitación antes de lanzarla contra un cilindro de 200 kN.
   minutos. Ese número fija el `Ts` de control alcanzable. Un retardo de transporte no
   modelado se le aparece al NARX como dinámica falsa, así que debe **medirse y luego
   incluirse en el modelo** como retardo puro.
+- **LATENCIA DEL LAZO — medida el 2026-08-13** (`tools/daq.py --latencia`, 2000
+  iteraciones, AO sostenido a 0 V):
+
+  | | min | mediana | p95 | máx |
+  |---|---|---|---|---|
+  | Lectura AI | 2.32 | **2.80** | 3.14 | 7.46 ms |
+  | Escritura AO | 2.19 | **2.65** | 3.03 | 6.61 ms |
+  | **Total (leer + escribir)** | 4.69 | **5.46** | 6.11 | **9.86 ms** |
+
+  σ = 0.40 ms. **Ts de control = 20 ms (50 Hz)** deja la mitad del periodo libre
+  incluso en el peor caso medido. Es el mismo Ts que `pi5_qnx_project`, lo que
+  facilita comparar. Ese ~5.5 ms es además el **retardo puro** que hay que incluir
+  en el modelo NARX: un retardo de transporte no modelado se le aparece a la red
+  como dinámica falsa.
+
+  > ⚠ **Trampa que costó un factor 37.** La primera medida dio **202 ms** de mediana.
+  > No era el enlace: la tarea de AI no se arrancaba explícitamente, así que DAQmx
+  > hacía un **start/stop implícito en cada `read()`**, y sobre un chasis Ethernet eso
+  > es carísimo. Con `TASK_COMMIT` + `start()` una sola vez, la misma medida da
+  > 5.46 ms. Si alguna vez el lazo va inexplicablemente lento, mirar esto primero.
+
+  > **Lo que 50 Hz NO captura, dicho explícitamente:** la servoválvula está en 120 Hz
+  > y la resonancia hidráulica entre 315 y 530 Hz (§5.4), ambas **por encima de
+  > Nyquist**. El modelo a Ts = 20 ms las trata como instantáneas. Para el lazo de
+  > posición es razonable —quedan fuera del ancho de banda de control— pero **no se
+  > puede afirmar que el modelo las contenga**.
+
 - **Confirmar la ganancia real de la cadena**: `K_amp` del amplificador, el ajuste de null
   del carrete y la ganancia mm/s por voltio. Es lo que zanja la discrepancia de 6.5× (§5.1).
 - Decidir el **Ts de trabajo**. Referencias: ω_sv = 150 Hz y ω_h = 225 Hz. Muestrear a
