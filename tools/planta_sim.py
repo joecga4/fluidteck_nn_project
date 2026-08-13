@@ -42,9 +42,8 @@ Consecuencias que un modelo de una sola camara NO puede reproducir:
      que RETRAER ES MAS LENTO, con relacion ~0.77. Y los datos de 2017 dan
      0.0114/0.0147 = 0.78 (CLAUDE.md §5.1): coincide. Ver `presiones_regimen`.
   2. INTENSIFICACION DE PRESION. Al retener o frenar, la camara anular puede
-     subir a P_A*(A_A/A_B) = 164 bar con solo 100 bar en la de fondo. Por eso el
-     transductor de B es 0-400 bar y el de A solo 0-100 bar: no es un capricho
-     del fabricante, es esta ecuacion.
+     subir a P_A*(A_A/A_B) = 164 bar con solo 100 bar en la de fondo. Es la razon
+     de que los dos transductores tengan rangos distintos.
   3. Con DOS presiones medidas por separado (ai2, ai3) se puede validar el modelo
      contra estados internos, no solo contra la posicion.
 
@@ -106,9 +105,13 @@ import numpy as np
 class ParamsPlanta:
     """Parametros fisicos del equipo.
 
-    Fuentes: memoria de Fluidtek 2017 (CLAUDE.md §2, §3) corregida con los datos
-    que aporto el laboratorio el 2026-08-12 (carrera y rangos de sensores).
-    Los campos marcados (!) son los que CLAUDE.md §8 senala como dudosos.
+    Fuentes, por orden de autoridad:
+      1. MEDIDAS en el equipo (2026-08-12): carrera, escalas de sensor, ganancia
+         de velocidad, asimetria y deriva de null. Ver CLAUDE.md §5.3.
+      2. CATALOGO Moog 761 Rev. M para la servovalvula G761-3001B H04JOFM4VPL,
+         que corrige caudal nominal, corriente y ancho de banda (CLAUDE.md §2.2).
+      3. Memoria de Fluidtek 2017 para el resto (beta, V_t, M_t...), sabiendo
+         que esta desactualizada: ver las discrepancias en CLAUDE.md §8.
     """
 
     # --- Geometria del actuador ------------------------------------------
@@ -141,13 +144,43 @@ class ParamsPlanta:
     # una fuga real en el cilindro.
     K_fuga: float = 0.0          # [m^5/(N*s)] fuga cruzada entre camaras
 
-    # --- Servovalvula -----------------------------------------------------
-    omega_sv: float = 942.47     # [rad/s] 150 Hz a -3 dB
+    # --- Servovalvula: MOOG G761-3001B  H04JOFM4VPL -----------------------
+    # Datos del catalogo Moog 761 Series (Rev. M, 2024), decodificando el
+    # codigo de pedido. Sustituyen a los de la memoria de 2017, que describia
+    # otra variante:
+    #   H   High response          04  4 L/min (1.0 gpm) a dP_N = 35 bar POR LAND
+    #   J   axis cut, ZERO LAP     O   315 bar, cuerpo de aluminio
+    #   F   pilot STANDARD dyn.    M   centrada sin senial
+    #   4   pilotaje interno (P)   V   juntas FKM
+    #   P   conector 4 pin lado P  L   +-40 mA single/paralelo, +-20 mA serie
+    omega_sv: float = 2 * math.pi * 120.0   # [rad/s] 120 Hz a -3 dB para
+    #   H04..F (pag. 9 del catalogo). La memoria usaba 150 Hz, que no
+    #   corresponde a esta variante: el ..G (High dynamics) da 140 Hz y este
+    #   es ..F (Standard dynamics). Ademas el dato del catalogo se mide a
+    #   210 bar de pilotaje y aqui se trabaja a 100 bar, asi que la respuesta
+    #   real sera algo MAS LENTA que estos 120 Hz.
     delta_sv: float = 0.7        # [-]
-    i_nom: float = 20e-3         # [A]     corriente nominal
-    Q_nom: float = 4.78 / 60000  # [m^3/s] 4.78 L/min
-    dP_nom: float = 35e5         # [Pa] caida POR ORIFICIO en la curva nominal
-    #                                 (70 bar totales repartidos entre los dos)
+
+    # Corriente para 100 % de carrera del carrete. El codigo L admite dos
+    # conexionados y NO es lo mismo: en serie son +-20 mA y en single/paralelo
+    # +-40 mA. La ganancia medida en el equipo (0.446 mm/s por V) encaja con
+    # +-40 mA (predice 0.377) y no con +-20 mA (predice 0.755), asi que se
+    # toma el paralelo. CONFIRMAR mirando el cableado del amplificador.
+    i_nom: float = 40e-3         # [A]
+    Q_nom: float = 4.0 / 60000   # [m^3/s] 4 L/min nominales (no 4.78)
+    dP_nom: float = 35e5         # [Pa] caida POR LAND, tal como la define el
+    #                                 catalogo (70 bar entre los dos lands)
+
+    # --- No linealidades declaradas por el fabricante (pag. 7) -------------
+    # Se dejan como referencia de que valores son PLAUSIBLES al activar las no
+    # linealidades de abajo; medidas a 210 bar, 32 mm2/s y 40 C.
+    #   histeresis tipica            <= 3.0 % de la corriente nominal
+    #   umbral (threshold) tipico    <= 0.5 %
+    #   deriva de null por dT=55 C   <= 2.0 %
+    #   tolerancia de caudal          +-10 %
+    # El carrete es ZERO LAP: el catalogo describe "minimal change in gain
+    # through null region", que es justo lo que se midio (dos ramas lineales
+    # con R2 ~ 0.999 y sin meseta). Por eso `solape` se deja en 0.
 
     # --- Cadena de mando --------------------------------------------------
     K_amp: float = 0.003         # [A/V] (!) ganancia del amplificador

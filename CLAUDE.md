@@ -56,21 +56,74 @@ es donde el error de seguimiento (`ΔXA = velocidad_comando / Kvx`, §3.2) manda
   **limitadora de presión RDBA-LAN** ajustada a **100 bar** (presión de trabajo del sistema).
 - **Aceite** RANDO HD.
 
-### 2.2 Servoválvula (el actuador que gobierna la red)
-- Marca **Moog**, 4 vías, **centro cerrado**, montada directamente sobre el manifold.
-- **Corriente de comando ±20 mA nominal** por devanado (rango de la curva de fabricante
-  hasta ±40 mA). Carrete: **±0.5 mm** de desplazamiento máximo.
-- **Caudal nominal 4.78 L/min** a 70 bar de caída de presión y 100 % de señal.
-  Curva usada en la memoria: `QL = 4·√((100−PL)/70)·(i/40)` [L/min, bar, mA].
-- **Dinámica** (de la curva de Bode del fabricante, −3 dB): **f = 150 Hz**.
-  - Modelo de 1.er orden: `τ = 1.06 ms`, `G(s) = 1/(0.001061·s + 1)`.
-  - Modelo de 2.º orden: `ωsv = 942.47 rad/s`, `δsv = 0.7`,
-    `G(s) = 1/(1.126e−6·s² + 0.001485·s + 1)`.
-- **Ganancia** `Ksv = Qnom/inom = 4.78 L/min ÷ 20 mA = 0.00398 m³/(A·s)`.
-- ⚠ **Histéresis y zona de null:** el fabricante reporta histéresis en el carrete y la
-  memoria dedica una figura al **ajuste de la posición nula** (Fig. 2.43). Los datos de
-  2017 confirman una **deriva a comando cero** (§5.1). Es el análogo hidráulico de la zona
-  muerta del L298N en el proyecto del motor: **la no linealidad que justifica usar una red**.
+### 2.2 Servoválvula — **Moog G761-3001B  H04JOFM4VPL**
+*(hoja de datos en `docs/Moog-ServoValves-761Series-Catalog-en.pdf`, Rev. M 2024)*
+
+El código de pedido identifica la válvula sin ambigüedad, y **corrige varios datos de la
+memoria**, que describía otra variante:
+
+| Campo | Código | Significado |
+|---|---|---|
+| 1 Valve version | **H** | High response |
+| 2 Rated flow | **04** | **4 L/min (1.0 gpm)** a `Δp_N = 35 bar` **por land** (70 bar en total) |
+| 3 Bushing/spool | **J** | 4 vías, *axis cut*, **ZERO LAP** |
+| 4 Presión máx / cuerpo | **O** | 315 bar, cuerpo de aluminio |
+| 5 Pilot stage design | **F** | **Standard dynamics** (el *preferred model* lleva `G` = High) |
+| 6 Carrete sin señal | **M** | Centrado |
+| 7 Pilotaje | **4** | Interno (puerto P) |
+| 8 Juntas | **V** | FKM (fluorocarbono) |
+| 9 Conector | **P** | 4 pines MS sobre el lado P |
+| 10 Señal de comando | **L** | **±40 mA** single/paralelo · **±20 mA** en serie |
+
+**Dinámica real de esta variante** (`H04..F`, pág. 9 del catálogo):
+
+| | |
+|---|---|
+| **−3 dB** | **120 Hz** ⇒ `ω_sv = 754 rad/s` |
+| 90° de fase | 200 Hz |
+| Escalón 0–100 % | 4 ms |
+
+La memoria usaba **150 Hz**, que no corresponde: el `..G` (High dynamics) da 140 Hz y esta
+es `..F`. Además el dato del catálogo se mide a **210 bar de pilotaje** y aquí se trabaja a
+**100 bar**, así que la respuesta real será algo **más lenta** que esos 120 Hz.
+
+**No linealidades declaradas por el fabricante** (pág. 7, a 210 bar / 32 mm²/s / 40 °C):
+
+| | |
+|---|---|
+| Histéresis típica | **≤ 3.0 %** |
+| Umbral (*threshold*) | ≤ 0.5 % |
+| **Deriva de null por ΔT = 55 °C** | **≤ 2.0 %** |
+| Tolerancia de caudal | ±10 % |
+
+>  **El carrete es ZERO LAP, y eso confirma la medida.** El catálogo describe el *axis cut*
+> como «minimal change in gain through null region», frente a las opciones de solape (`A` 3 %,
+> `C` mínimo, `D` 10 %) que esta válvula **no** lleva. Es exactamente lo que midió el barrido:
+> dos ramas lineales con R² ≈ 0.999 y **sin meseta** (§5.3b). La estimación inicial de una
+> «zona muerta de 0.24 V» era incompatible con el hardware, además de con los datos.
+
+> ⚠ **`±40 mA` o `±20 mA` según el conexionado, y no es un detalle.** El código `L` admite
+> las dos. La ganancia medida (**0.446 mm/s·V**) encaja con **±40 mA** —el modelo predice
+> 0.377— y no con ±20 mA, que daría 0.755. Se adopta el paralelo/single. **Confirmar mirando
+> el cableado del amplificador**, porque de aquí cuelga toda la escala del comando.
+
+**Deriva de null por temperatura — cierra un cabo que teníamos suelto.** La especificación
+de ≤ 2 % por ΔT = 55 °C, con `±10 V ↔ ±40 mA`, son **0.20 V de comando por cada 55 °C**.
+Y teníamos dos medidas que parecían no encajar:
+
+- el barrido dio velocidad nula en **−0.370 V**;
+- sostener 180 s en −0.370 V **seguía derivando** −0.95 mm/min, lo que implica un null real
+  cercano a **−0.41 V**.
+
+Esos **41 mV de diferencia equivalen a ~11 °C** de aceite según la especificación — un
+calentamiento perfectamente normal en una sesión con la bomba en marcha. **No son dos
+medidas contradictorias: es la misma planta a dos temperaturas.**
+
+Consecuencia de fondo: **el null no es una constante que se calibre una vez.** 0.2 V de
+deriva son ~4.7 mm/min, **tres veces la consigna del ensayo de losa**. Refuerza las dos
+reglas ya anotadas: comparar siempre en la misma sesión registrando la temperatura del
+aceite (§6.4), y que **el lazo necesita acción integral** — el null no se puede fijar en
+lazo abierto por bien que se mida (§5.3c2).
 
 ### 2.3 Actuador
 | Parámetro | Símbolo | Valor |
@@ -128,9 +181,10 @@ es donde el error de seguimiento (`ΔXA = velocidad_comando / Kvx`, §3.2) manda
 > Manda el dato del laboratorio; queda anotado como una discrepancia más de la memoria (§8).
 
 - **Amplificador de la servoválvula:** convierte **±10 V → ±100 mA** (capacidad); en el
-  modelo se usa `K_amp = 0.003 A/V` (⇒ ±10 V ↦ ±30 mA, coherente con el rango útil de la
-  válvula). **Verificar el ajuste real del amplificador** antes de la captura: este número
-  fija toda la ganancia del lazo.
+  modelo se usa `K_amp = 0.003 A/V`. Con la válvula real (±40 mA para el 100 % de carrera,
+  §2.2) eso significa que **±10 V solo alcanzan el 75 % del recorrido del carrete**.
+  **Verificar el ajuste real del amplificador**: este número fija toda la ganancia del lazo
+  y es el candidato principal para el 18 % que aún separa modelo y medida.
 
 ### 2.5 Adquisición y cómputo
 | Módulo | Descripción |
@@ -295,6 +349,7 @@ la estabilidad viene del lazo. Los límites de seguridad del §6.3 no son burocr
 | Diseño de la secuencia de excitación (`tools/gen_excitacion.py`) | 2026-08-12 | ✅ | APRBS multinivel con signo + plegado dentro de la ventana segura (§6.2) |
 | Capa de E/S y diagnóstico (`tools/daq.py`) | 2026-08-12 | ✅ | `--diag` sin mover la planta; captura AO+AI con trigger común |
 | Maniobras de máquina: `--hpu`, `--caracteriza`, `--jog` + protocolo de Fase 0 | 2026-08-12 | ✅ | `--armar` obligatorio; el puerto DO se escribe entero para sostener el permisivo |
+| **Servoválvula identificada por catálogo** (G761-3001B H04JOFM4VPL) | 2026-08-13 | ✅ | 4 L/min · ±40 mA · **120 Hz** · zero lap; el modelo pasa de errar 1.65× a **18 %** (§2.2) |
 | **Escala de presión calibrada por dos puntos** | 2026-08-12 | ✅ | balance de fuerzas de −141 kN a **+0.8 kN**; `P_B/P_A = 1.667` vs `A_A/A_B = 1.641` (§5.3c) |
 | **Primer arranque de la UPH desde Python** | 2026-08-12 | ✅ | DO line0 = marcha · DO line5 = permisivo · DI line7 = motor encendido; **K₊ = 0.446 / K₋ = 0.378 mm/s·V**, asimetría medida **0.847** vs 0.772 del modelo; deriva **8.4 mm/min** (§5.3) |
 | **Fase 0 (parcial): línea base de los 4 sensores en el equipo real** | 2026-08-12 | ✅ | celda y presiones **concuerdan** en fuerza; ruido de modo común a 133.8 Hz; σ_posición = 0.28 mm ⇒ límite de medida de velocidad (§5.2) |
@@ -746,6 +801,7 @@ llegaron) · `tools/` (Python del host) · `results/` (datos y figuras del infor
 | `tools/gen_excitacion.py` | python | diseña la secuencia APRBS de captura (§6.2) con plegado dentro de la ventana de posición segura; la valida contra el simulador y exporta el CSV que se precarga en el AO |
 | `docs/protocolo_fase0.md` | protocolo | checklist de la primera sesión de máquina: qué medir, en qué orden y qué anotar |
 | `tools/daq.py` | python | capa de E/S sobre `nidaqmx`: `--diag`/`--di`/`--sensores` (solo lectura), `--hpu` (arranque de la UPH), `--caracteriza` (curva comando→velocidad), `--jog` (recolocación), `--latencia`, y la captura AO+AI temporizada por hardware con trigger común (§2.5.1) |
+| `docs/Moog-ServoValves-761Series-Catalog-en.pdf` | ref. | catálogo Moog 761 (Rev. M, 2024). Identifica la válvula **G761-3001B H04JOFM4VPL** y da sus curvas y tolerancias reales (§2.2) |
 | `docs/Memoria…FLUIDTEK.pdf` | ref. | memoria original de Fluidtek (2017), 255 pp. **Desactualizada** respecto al equipo actual: verificar contra el hardware antes de fiarse de un número |
 | `labview/DISENO/` | LabVIEW | proyecto original: `FluidtekPrensaCONident.vi`, `FluidtekPrensaCONidentLEDI.vi`, `Identi.vi`, `HPU.vi`, `LVDT.vi`, `ALMACENAMIENTO.vi`, `DeltaP.vi`… |
 | `labview/VI's LEDI/` | LabVIEW | VIs añadidos por el laboratorio: `genLEDI.vi`, `proflu.vi` |
