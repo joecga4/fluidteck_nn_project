@@ -241,6 +241,161 @@ class RedNARX:
 
 
 # ============================================================================
+# 2b. RED DINAMICA entrenada por DBP (Dynamic Back-Propagation)
+# ============================================================================
+class RedDBP:
+    r"""Modelo RECURRENTE entrenado propagando las sensibilidades EN EL TIEMPO.
+
+    Estructura (Narendra & Parthasarathy, 1990):
+
+        h(k)   = tanh( [x(k), u(k)]·V + bv )         [nh]
+        x(k+1) = h(k)·W + b                          [ns]
+        dy(k)  = x(k)[0]                             solo la 1a componente se observa
+
+    El estado `x` es INTERNO: la red no recibe nunca la medida, ni siquiera al
+    entrenar. Esa es la diferencia con el NARX serie-paralelo, y trae dos
+    consecuencias:
+
+      1. NO HAY REGRESOR RUIDOSO. En el NARX la entrada dy(k) es la medida, con
+         su ruido, y eso sesga la estimacion (errores en las variables). Aqui el
+         ruido queda solo en el OBJETIVO, donde no sesga: solo anade varianza.
+      2. SE ENTRENA SOBRE EL ERROR DE SIMULACION LIBRE, que es la metrica que de
+         verdad importa. El NARX se entrena a un paso y se SELECCIONA por
+         simulacion libre, que es un parche: se optimiza un criterio y se elige
+         por otro. Aqui coinciden por construccion.
+
+    DBP frente a BPTT: DBP propaga las sensibilidades dx/dtheta hacia ADELANTE
+    en el tiempo (es lo mismo que calcula RTRL). BPTT obtiene el MISMO gradiente
+    hacia atras, desenrollando la trayectoria. Se usa DBP porque es lo que pide
+    el curso y porque no necesita guardar la trayectoria entera.
+
+    LA RECURSION, que es todo el metodo:
+
+        S(k) = dx(k)/dtheta                          [ns, P]
+        S(k+1) = J(k)·S(k)  +  E(k)
+                 \_______/     \__/
+                 propagado      termino explicito de este paso
+
+        J(k)[j,i] = dx(k+1)_j / dx(k)_i = sum_m V[i,m]·(1-h_m^2)·W[m,j]
+
+    y el gradiente del error acumulado es  sum_k e(k)·S(k)[0,:]  con
+    e(k) = x(k)[0] - dy_medido(k).
+    """
+
+    def __init__(self, ns: int, ni: int, nh: int, rng: np.random.Generator):
+        ne = ns + ni
+        self.ns, self.ni, self.nh, self.ne = ns, ni, nh, ne
+        self.V = rng.normal(0, np.sqrt(1.0 / ne), (ne, nh))
+        self.bv = np.zeros(nh)
+        self.W = rng.normal(0, np.sqrt(1.0 / nh), (nh, ns))
+        self.b = np.zeros(ns)
+
+    # ------------------------------------------------------------ un paso
+    def paso(self, x, u):
+        e = np.concatenate([x, np.atleast_1d(u)])
+        h = np.tanh(e @ self.V + self.bv)
+        return h @ self.W + self.b, h, e
+
+    # ------------------------------------------------- simulacion libre
+    def simula(self, useq, x0=None):
+        """Recorre la secuencia SIN ver ni una sola medida."""
+        x = np.zeros(self.ns) if x0 is None else np.array(x0, dtype=float)
+        out = np.empty(len(useq))
+        for k in range(len(useq)):
+            out[k] = x[0]
+            x, _, _ = self.paso(x, useq[k])
+        return out
+
+    # ------------------------------------------------------ gradiente DBP
+    def gradiente(self, useq, dseq, x0=None):
+        """Sensibilidades hacia adelante sobre una subsecuencia. Devuelve
+        (gV, gbv, gW, gb) y el error cuadratico medio."""
+        ns, nh, ne = self.ns, self.nh, self.ne
+        x = np.zeros(ns) if x0 is None else np.array(x0, dtype=float)
+        # S: derivada del estado respecto de cada parametro
+        SV = np.zeros((ns, ne, nh)); Sbv = np.zeros((ns, nh))
+        SW = np.zeros((ns, nh, ns)); Sb = np.zeros((ns, ns))
+        gV = np.zeros_like(self.V); gbv = np.zeros_like(self.bv)
+        gW = np.zeros_like(self.W); gb = np.zeros_like(self.b)
+        E = 0.0
+        L = len(dseq)
+        for k in range(L):
+            err = x[0] - dseq[k]
+            E += err * err
+            # el gradiente solo "ve" la primera componente del estado
+            gV += err * SV[0]; gbv += err * Sbv[0]
+            gW += err * SW[0]; gb += err * Sb[0]
+
+            xn, h, e = self.paso(x, useq[k])
+            g = 1.0 - h * h                                   # tanh'
+            # J[j,i] = dx(k+1)_j/dx(k)_i
+            J = ((self.V[:ns, :] * g) @ self.W).T             # [ns, ns]
+
+            # propagar y anadir el termino explicito de este paso
+            SV = np.einsum('ji,iab->jab', J, SV)
+            Sbv = J @ Sbv
+            SW = np.einsum('ji,iab->jab', J, SW)
+            Sb = J @ Sb
+            Wg = self.W * g[:, None]                          # [nh, ns]
+            SV += np.einsum('a,mj->jam', e, Wg)               # dx_j/dV[a,m]
+            Sbv += Wg.T                                       # dx_j/dbv[m]
+            for j in range(ns):
+                SW[j, :, j] += h                              # dx_j/dW[m,j]
+                Sb[j, j] += 1.0
+            x = xn
+        return (gV / L, gbv / L, gW / L, gb / L), 0.5 * E / L
+
+    # ------------------------------------------------------------- Adam
+    def entrena(self, useq, dseq, epocas=60, largo=400, lr=5e-3, rng=None):
+        """Adam sobre subsecuencias. Se trocea la serie porque las
+        sensibilidades se propagan dentro del trozo: trozos largos dan un
+        gradiente mas fiel pero menos actualizaciones por epoca."""
+        pars = ("V", "bv", "W", "b")
+        m = [np.zeros_like(getattr(self, p)) for p in pars]
+        v = [np.zeros_like(getattr(self, p)) for p in pars]
+        b1, b2, eps = 0.9, 0.999, 1e-8
+        paso_n = 0
+        rng = rng or np.random.default_rng(0)
+        n_tr = len(dseq) // largo
+        for _ in range(epocas):
+            for i in rng.permutation(n_tr):
+                a = i * largo
+                gs, _ = self.gradiente(useq[a:a + largo], dseq[a:a + largo])
+                paso_n += 1
+                for k, (p, gk) in enumerate(zip(pars, gs)):
+                    m[k] = b1 * m[k] + (1 - b1) * gk
+                    v[k] = b2 * v[k] + (1 - b2) * gk * gk
+                    mh = m[k] / (1 - b1**paso_n); vh = v[k] / (1 - b2**paso_n)
+                    setattr(self, p, getattr(self, p) - lr * mh / (np.sqrt(vh) + eps))
+
+
+def verifica_gradiente_dbp(semilla=0):
+    """Contrasta el gradiente DBP contra diferencias finitas.
+
+    Es la comprobacion que separa "el codigo corre" de "el codigo calcula lo
+    que dice calcular". Sin esto, un signo mal puesto en la recursion se
+    manifiesta como "la red no aprende" y se pierde un dia buscandolo en el
+    sitio equivocado.
+    """
+    rng = np.random.default_rng(semilla)
+    red = RedDBP(ns=2, ni=1, nh=4, rng=rng)
+    u = rng.normal(size=25); d = rng.normal(size=25) * 0.1
+    gs, _ = red.gradiente(u, d)
+    print("  VERIFICACION DEL GRADIENTE (DBP vs diferencias finitas)")
+    h = 1e-6
+    for nom, g in zip(("V", "bv", "W", "b"), gs):
+        P = getattr(red, nom); num = np.zeros_like(P); it = np.nditer(P, flags=['multi_index'])
+        while not it.finished:
+            i = it.multi_index; o = P[i]
+            P[i] = o + h; _, Ep = red.gradiente(u, d)
+            P[i] = o - h; _, Em = red.gradiente(u, d)
+            P[i] = o; num[i] = (Ep - Em) / (2 * h)
+            it.iternext()
+        err = np.max(np.abs(num - g)) / (np.max(np.abs(num)) + 1e-30)
+        print(f"    {nom:3s}: error relativo maximo = {err:.2e}")
+
+
+# ============================================================================
 # 3. SIMULACION LIBRE — la metrica que manda
 # ============================================================================
 def simula_libre(red, esc, dat: dict, ny: int, nu: int, k0: int, N: int):
@@ -399,8 +554,58 @@ def informe(red, esc, tr, va, ny, nu):
     return rt, rv
 
 
+def dbp_prepara(dat, esc=None):
+    """Serie (u, dy) escalada, lista para el modelo dinamico."""
+    dy = np.diff(dat["y"])
+    u = dat["u"][:len(dy)]
+    if esc is None:
+        esc = {"mu": u.mean(), "su": u.std() + 1e-12,
+               "md": dy.mean(), "sd": dy.std() + 1e-12}
+    return (u - esc["mu"]) / esc["su"], (dy - esc["md"]) / esc["sd"], dy, esc
+
+
+def corre_dbp(args):
+    tr = carga("results/captura_train.csv", args.Ts)
+    va = carga("results/captura_val.csv", args.Ts)
+    un_tr, dn_tr, dy_tr, esc = dbp_prepara(tr)
+    un_va, dn_va, dy_va, _ = dbp_prepara(va, esc)
+
+    print(f"\n  Ts = {args.Ts*1000:.0f} ms   estado ns={args.ns}   red "
+          f"{args.ns+1}-{args.hidden}-{args.ns}   trozos de {args.largo} muestras")
+    verifica_gradiente_dbp()
+
+    mejor, fmej = None, -np.inf
+    for r in range(args.reinicios):
+        rng = np.random.default_rng(args.seed + r)
+        red = RedDBP(args.ns, 1, args.hidden, rng)
+        red.entrena(un_tr, dn_tr, epocas=args.epocas, largo=args.largo, rng=rng)
+        pv = red.simula(un_va) * esc["sd"] + esc["md"]
+        f = ajuste(dy_va, pv)
+        print(f"    reinicio {r+1}/{args.reinicios}: fit libre en val = {f:6.2f} %")
+        if f > fmej:
+            mejor, fmej = red, f
+
+    print("\n  " + "=" * 64)
+    print(f"  {'serie':7s} {'SIM LIBRE':>11s} {'R2':>9s} {'sesgo':>16s} {'techo':>8s}")
+    for et, un, dy, dat in (("train", un_tr, dy_tr, tr), ("val", un_va, dy_va, va)):
+        p = mejor.simula(un) * esc["sd"] + esc["md"]
+        techo = techo_ruido(dat)
+        print(f"  {et:7s} {ajuste(dy, p):10.2f}% {r2(dy, p):9.4f} "
+              f"{np.mean(p-dy)/dat['Ts']*60:+11.3f} mm/min {techo:7.1f}%")
+    print("  " + "=" * 64)
+    np.savez("results/nn_dbp.npz", V=mejor.V, bv=mejor.bv, W=mejor.W, b=mejor.b,
+             ns=args.ns, Ts=args.Ts, **esc)
+    print("\n[ok] results/nn_dbp.npz")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Modelo NARX de la prensa (Fase 1)")
+    ap.add_argument("--tipo", choices=["estatico", "dinamico"], default="estatico",
+                    help="estatico = NARX/FIR entrenado a un paso; "
+                         "dinamico = recurrente entrenado por DBP")
+    ap.add_argument("--ns", type=int, default=2, help="dimension del estado (DBP)")
+    ap.add_argument("--largo", type=int, default=400,
+                    help="longitud de la subsecuencia para propagar (DBP)")
     ap.add_argument("--Ts", type=float, default=0.100, help="Ts del modelo [s]")
     ap.add_argument("--ny", type=int, default=0,
                     help="incrementos pasados realimentados (0 = FIR, el mejor)")
@@ -408,6 +613,7 @@ def main():
     ap.add_argument("--hidden", type=int, default=15)
     ap.add_argument("--epocas", type=int, default=250)
     ap.add_argument("--reinicios", type=int, default=3)
+    ap.add_argument("--epocas-dbp", type=int, default=25)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--barrido-ts", action="store_true",
                     help="compara varios Ts y sale")
@@ -415,8 +621,14 @@ def main():
     args = ap.parse_args()
 
     print("=" * 70)
-    print("MODELO NARX SOBRE INCREMENTOS — linea base (ignora la deriva del null)")
+    tit = ("NARX/FIR entrenado a UN PASO" if args.tipo == "estatico"
+           else "RED DINAMICA entrenada por DBP (simulacion libre directa)")
+    print(f"MODELO SOBRE INCREMENTOS — {tit}")
     print("=" * 70)
+
+    if args.tipo == "dinamico":
+        corre_dbp(args)
+        return
 
     if args.barrido_ts:
         print(f"\n{'Ts':>7s} {'fit libre train':>16s} {'fit libre val':>14s}"

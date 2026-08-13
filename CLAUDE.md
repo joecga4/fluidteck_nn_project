@@ -361,6 +361,7 @@ la estabilidad viene del lazo. Los límites de seguridad del §6.3 no son burocr
 | Rangos reales de sensores + carrera de 150 mm | 2026-08-12 | ✅ | span de presión **2–10 V** deducido y verificado; corrige escalas y límites de seguridad (§2.4) |
 | **Modelo de dos cámaras** (cilindro asimétrico) | 2026-08-12 | ✅ | predice relación de velocidades **0.772**, y 2017 midió **0.78** (§5.4) |
 | **Captura real en el equipo (train + val)** | 2026-08-13 | ✅ | 2 × 610 s a 1 kHz, **Ts exacto**, sin muestras perdidas; el null se movió **71 mV** entre ambas (§5.6) |
+| **Red dinámica por DBP y comparación de enfoques** | 2026-08-13 | ✅ | 48.4 % vs 50.1 % del estático: **ambos topan en el techo del ruido**; gradiente verificado a 1e-10 (§5.8) |
 | **Modelo NARX de la planta — línea base** | 2026-08-13 | ✅ | FIR no lineal `dy(k+1)=f(u(k),u(k−1))`: **50.1 %** en simulación libre, el **87 % del techo** que impone el ruido (§5.7) |
 | Neurocontrolador (BPTT) | — | ⬜ | |
 | Despliegue en LabVIEW y comparación contra el PID | — | ⬜ | |
@@ -862,6 +863,63 @@ Era exactamente lo que la opción (1) tenía que dejar a la vista.
 optimizar el criterio equivocado. **La métrica que manda es la simulación libre**, y hay
 que seleccionar por ella.
 
+### 5.8 Fase 1 — red dinámica entrenada por DBP, y comparación
+
+Segundo enfoque del curso (Clase 07, punto B): modelo **recurrente** entrenado propagando
+las sensibilidades **en el tiempo**, sin que la red vea nunca una medida.
+
+```
+h(k)   = tanh( [x(k), u(k)]·V + bv )
+x(k+1) = h(k)·W + b
+dy(k)  = x(k)[0]                      solo la 1ª componente se observa
+```
+
+**La motivación era buena y vale la pena dejarla escrita.** En el NARX serie-paralelo la red
+recibe `dy(k)` **medido** como entrada, con su ruido: eso es un problema de *errores en las
+variables* y sesga la estimación. En la configuración paralela del DBP la red recibe **su
+propia salida**, determinista; el ruido queda solo en el objetivo, donde no sesga. Además el
+DBP **entrena directamente sobre el error de simulación libre**, que es la métrica que
+importa, en vez de entrenar a un paso y *seleccionar* por simulación libre (§5.7e).
+
+**Gradiente verificado contra diferencias finitas: error relativo 1e-10 – 1e-11** en los
+cuatro bloques de pesos. La comprobación quedó dentro del programa y se ejecuta en cada
+entrenamiento.
+
+**Resultado — los dos enfoques topan en el mismo sitio:**
+
+| Modelo | estructura | **sim. libre val** | R² | sesgo val | % del techo |
+|---|---|---|---|---|---|
+| **Estático (FIR)** | 2-15-1, `f(u(k),u(k−1))` | **50.13 %** | 0.751 | +1.18 mm/min | **87 %** |
+| **Dinámico (DBP)** | 3-10-3, estado ns=3 | **48.35 %** | 0.733 | +1.28 mm/min | **84 %** |
+| *(techo por ruido)* | — | *57.7 %* | — | — | — |
+
+**Y ése es el resultado, no cuál gana por dos puntos.** Dos arquitecturas con filosofías
+opuestas —una sin memoria y entrenada a un paso, otra con estado interno y entrenada sobre
+la trayectoria— llegan al mismo sitio, a unos 8 puntos del techo que impone el sensor.
+**El límite no es la arquitectura: es el ruido de la medida de posición.** Cualquier
+esfuerzo adicional en el modelo tiene rendimientos decrecientes; bajar σ sí los tiene.
+
+Tres observaciones que conviene retener:
+
+1. **El DBP no arregla la deriva del null**, y no podía: su sesgo en validación (+1.28) es
+   el mismo que el del estático (+1.18). No es un defecto de estructura sino que `train` y
+   `val` están a distinta temperatura, y **ningún estado recurrente puede inferir un
+   desplazamiento del null que no tiene observable asociada**.
+2. **En `train` el DBP tiene menos sesgo** (−0.05 vs −0.40 mm/min): era de esperar, porque
+   optimiza exactamente el error de simulación libre. Su ventaja teórica es real; lo que
+   pasa es que aquí no hay margen donde ejercerla.
+3. **Contraste con `pi5_qnx_project`, donde el orden se invierte.** Allá el NARX ganó al DBP
+   (82.6 % vs 76.8 %) porque recibía RPM medidas de buena calidad. Aquí esa ventaja se
+   anula: la salida medida es ruidosa en relación con el incremento, y por eso el enfoque
+   sin realimentación queda a la par. **La misma comparación da resultados opuestos en dos
+   plantas, y la razón es la relación señal/ruido de la salida** — es más informativo que
+   cualquiera de los cuatro números por separado.
+
+⚠ **Corrección sobre una lectura preliminar.** Con 12 épocas los reinicios del DBP daban
+46.2 % y 32.9 %, y se anotó que el entrenamiento recurrente tenía mucha más dispersión de
+semilla. Con 40 épocas los tres reinicios dan 48.20 / 48.13 / 48.35: la dispersión era
+**falta de convergencia**, no una propiedad del método.
+
 ---
 
 ## 6. Metodología de trabajo
@@ -997,7 +1055,7 @@ llegaron) · `tools/` (Python del host) · `results/` (datos y figuras del infor
 | `tools/planta_sim.py` | python | simulador físico del servo-hidráulico de **dos cámaras** (§5.5): servoválvula + dinámica hidráulica + integrador + no linealidades opcionales |
 | `tools/gen_excitacion.py` | python | diseña la secuencia APRBS de captura (§6.2) con plegado dentro de la ventana de posición segura; la valida contra el simulador y exporta el CSV que se precarga en el AO |
 | `docs/protocolo_fase0.md` | protocolo | checklist de la primera sesión de máquina: qué medir, en qué orden y qué anotar |
-| `tools/nn_modelo.py` | python | modelo de la planta con red neuronal (§5.7): predice incrementos, se valida en simulación libre y reporta el techo que impone el ruido |
+| `tools/nn_modelo.py` | python | modelo de la planta con red neuronal: `--tipo estatico` (NARX/FIR a un paso, §5.7) o `--tipo dinamico` (recurrente por DBP, §5.8). Predice incrementos, valida en simulación libre y reporta el techo que impone el ruido |
 | `tools/daq.py` | python | capa de E/S sobre `nidaqmx`: `--diag`/`--di`/`--sensores` (solo lectura), `--hpu` (arranque de la UPH), `--caracteriza` (curva comando→velocidad), `--jog` (recolocación), `--latencia`, y la captura AO+AI temporizada por hardware con trigger común (§2.5.1) |
 | `docs/Moog-ServoValves-761Series-Catalog-en.pdf` | ref. | catálogo Moog 761 (Rev. M, 2024). Identifica la válvula **G761-3001B H04JOFM4VPL** y da sus curvas y tolerancias reales (§2.2) |
 | `docs/Memoria…FLUIDTEK.pdf` | ref. | memoria original de Fluidtek (2017), 255 pp. **Desactualizada** respecto al equipo actual: verificar contra el hardware antes de fiarse de un número |
