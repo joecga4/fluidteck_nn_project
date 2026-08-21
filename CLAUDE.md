@@ -645,6 +645,7 @@ llegaron) · `tools/` (Python del host) · `results/` (datos y figuras del infor
 
 | Archivo | Tipo | Qué hace |
 |---|---|---|
+| `tools/planta.py` | python | **fuente única de los números de la planta**: geometría, ley comando→velocidad medida, null, caudal máximo, ruido y latencia. Cada valor dice su origen (MEDIDO / CATÁLOGO / MEMORIA). Es el fichero por el que empezar a leer el código |
 | `tools/planta_sim.py` | python | simulador físico del servo-hidráulico de **dos cámaras** (§5.5): servoválvula + dinámica hidráulica + integrador + no linealidades opcionales |
 | `tools/gen_excitacion.py` | python | diseña la secuencia APRBS de captura (§6.2) con plegado dentro de la ventana de posición segura; la valida contra el simulador y exporta el CSV que se precarga en el AO |
 | `docs/protocolo_fase0.md` | protocolo | checklist de la primera sesión de máquina: qué medir, en qué orden y qué anotar |

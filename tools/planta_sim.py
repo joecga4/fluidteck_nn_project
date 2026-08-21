@@ -97,6 +97,12 @@ from dataclasses import dataclass
 
 import numpy as np
 
+# Los valores por defecto de la geometria y del caudal salen de la fuente
+# unica del proyecto (tools/planta.py). Aqui siguen siendo CAMPOS del
+# dataclass, para poder simular variantes ("y si el cilindro fuera...");
+# lo que ya no se hace es re-escribir los numeros.
+import planta
+
 
 # ============================================================================
 # 1. PARAMETROS
@@ -115,21 +121,21 @@ class ParamsPlanta:
     """
 
     # --- Geometria del actuador ------------------------------------------
-    D_pistón: float = 0.160      # [m] diametro del embolo
-    d_vastago: float = 0.100     # [m] diametro del vastago
-    L_carrera: float = 0.150     # [m] CARRERA UTIL (dato del laboratorio;
+    D_piston: float = planta.D_PISTON     # [m] diametro del embolo
+    d_vastago: float = planta.D_VASTAGO   # [m] diametro del vastago
+    L_carrera: float = planta.L_CARRERA    # [m] CARRERA UTIL (laboratorio;
     #                                  la memoria citaba un sensor de 400 mm)
     V_A0: float = 0.3e-3         # [m^3] volumen muerto camara A (+ tuberia)
     V_B0: float = 0.3e-3         # [m^3] volumen muerto camara B (+ tuberia)
 
-    M_t: float = 150.0           # [kg]    masa movil total
+    M_t: float = planta.M_MOVIL           # [kg] masa movil total
     # MONTAJE VERTICAL con el vastago hacia abajo (dato del laboratorio,
     # 2026-08-12): los desplazamientos positivos van A FAVOR de la gravedad.
     # De la punta cuelga la celda de carga, ~28 kg. El peso del conjunto movil
     # entra como fuerza CONSTANTE en el sentido positivo, y es lo que explica
     # que el actuador descienda solo con el carrete cerrado (§5.3).
     vertical: bool = True
-    m_colgante: float = 28.0     # [kg]    celda de carga colgando del vastago
+    m_colgante: float = planta.M_COLGANTE # [kg] celda de carga colgante
     B_p: float = 0.0             # [N*s/m] amortiguamiento viscoso
     beta: float = 1.7e9          # [Pa]    modulo de compresibilidad del aceite
 
@@ -212,7 +218,7 @@ class ParamsPlanta:
     # estan en regimenes distintos, y por eso la relacion de velocidades pasa
     # de 0.946 (8 V) a 1.029 (10 V): se mueve hacia A_A/A_B = 1.641 conforme
     # entra en saturacion, tal como predice el modelo.
-    Q_bomba: float = 3.18 / 60000  # [m^3/s] techo MEDIDO en el equipo
+    Q_bomba: float = planta.Q_BOMBA       # [m^3/s] techo MEDIDO en el equipo
 
     # --- No linealidades (0 = desactivada) --------------------------------
     null_off: float = 0.0
@@ -234,13 +240,13 @@ class ParamsPlanta:
     @property
     def A_A(self) -> float:
         """Area de la camara SIN vastago (fondo) [m^2]. ~201.06 cm^2."""
-        return math.pi / 4 * self.D_pistón**2
+        return math.pi / 4 * self.D_piston**2
 
     @property
     def A_B(self) -> float:
         """Area de la camara CON vastago (anular) [m^2]. ~122.52 cm^2.
         Es la que la memoria llama A_p."""
-        return math.pi / 4 * (self.D_pistón**2 - self.d_vastago**2)
+        return math.pi / 4 * (self.D_piston**2 - self.d_vastago**2)
 
     @property
     def rel_areas(self) -> float:
@@ -437,7 +443,7 @@ class PlantaHidraulica:
             # Peso del conjunto movil, siempre en el sentido POSITIVO (hacia
             # afuera y hacia abajo). Con el carrete cerrado esta es la fuerza
             # que hace descender el vastago por la fuga residual del null.
-            F_net += (p.M_t + p.m_colgante) * 9.81
+            F_net += (p.M_t + p.m_colgante) * planta.G
 
         # Friccion seca de los sellos (stick-slip): la no linealidad que
         # estropea los ensayos a 0.1 mm/min, donde el vastago avanza a tirones.

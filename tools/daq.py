@@ -55,38 +55,66 @@ que ir por delante rellenando el buffer. La latencia de reaccion ante un limite
 es la profundidad del buffer (~0.3 s por defecto), que a la velocidad maxima de
 la planta son decimas de milimetro.
 
-Uso — en este orden (protocolo completo en docs/protocolo_fase0.md)
--------------------------------------------------------------------
-    SOLO LECTURA, no actuan sobre la planta:
-      python tools/daq.py --diag                 # enumera modulos y lee los AI
-      python tools/daq.py --di                   # lee los enclavamientos
-      python tools/daq.py --sensores --secs 10   # sensores en vivo
+MAPA DEL FICHERO
+----------------
+    1. Configuracion de la cadena de medida   que canal es que, y su escala
+    2. Descubrimiento del hardware            localizar los modulos del chasis
+    3. Diagnostico                            SOLO LECTURA
+    4. Estado seguro y latencia del lazo      AO a 0 V, medida del lazo
+    5. Digitales                              enclavamientos y arranque de la HPU
+    6. Calibracion de los transductores       recta de presion por dos puntos
+    7. Maniobras que mueven el actuador       sentido, curva u->v, saturacion, jog
+    8. Captura                                excitacion + registro, por hardware
 
-    Escriben (exigen --armar):
-      python tools/daq.py --hpu on --linea-hpu N --armar   # arranca la UPH
-      python tools/daq.py --cero --armar                   # AO a 0 V (seguro)
-      python tools/daq.py --latencia --armar               # mide el lazo (a 0 V)
-      python tools/daq.py --caracteriza --armar            # curva u -> velocidad
-      python tools/daq.py --jog 75 --armar                 # recoloca el vastago
-      python tools/daq.py --captura results/excitacion_train.csv \
-                          --etiqueta train --armar
-      python tools/daq.py --hpu off --linea-hpu N --armar  # para la UPH
+Los NUMEROS de la planta (areas, ley comando->velocidad, null, caudal maximo)
+NO estan aqui: viven en `tools/planta.py`, que es la fuente unica del proyecto.
 
-NOTA sobre la reserva del chasis: LabVIEW y NI MAX reservan los modulos y
-bloquean a Python (y al reves). Cerrar el VI y cualquier panel de prueba de MAX
-antes de empezar. Si algo falla con "resource already reserved", es esto.
+ORDEN DE TRABAJO en una sesion (protocolo completo en docs/protocolo_fase0.md)
+------------------------------------------------------------------------------
+    Nada de esto toca la planta:
+      python tools/daq.py --diag                  # modulos + los 4 AI + fuerza
+      python tools/daq.py --di                    # enclavamientos
+      python tools/daq.py --sensores --secs 10    # sensores en vivo
+
+    Escriben en el AO o en el DO, y por eso EXIGEN --armar:
+      python tools/daq.py --cero --armar          # AO a 0 V (estado seguro)
+      python tools/daq.py --hpu on --armar        # arranca la UPH y la para al salir
+      python tools/daq.py --latencia --armar      # mide el lazo (el AO no se mueve)
+
+    Maniobras que MUEVEN el actuador. Con --con-hpu arrancan y paran la bomba
+    dentro del MISMO proceso, que es lo unico que garantiza que el permisivo
+    siga afirmado durante toda la maniobra:
+      python tools/daq.py --caracteriza --con-hpu --armar        # curva u -> v
+      python tools/daq.py --jog 75 --con-hpu --armar             # recolocar
+      python tools/daq.py --satura --signo 1 --con-hpu --armar   # techo de caudal
+      python tools/daq.py --calibra-presion --man-a 30 --man-b 50 --armar
+      python tools/daq.py --captura results/excitacion_train.csv                           --etiqueta train --con-hpu --armar
+
+DOS COSAS QUE HAN COSTADO TIEMPO Y CONVIENE SABER DE ANTEMANO
+--------------------------------------------------------------
+  * ESPERAR 3 MINUTOS tras arrancar la HPU antes de medir nada. El transitorio
+    de arranque dura eso, y contamina cualquier medida corta: causo una
+    conclusion que hubo que retirar y varios abortos de prueba.
+  * RESERVA DEL CHASIS: LabVIEW y NI MAX reservan los modulos y bloquean a
+    Python (y al reves). Cerrar el VI y cualquier panel de prueba de MAX antes
+    de empezar. Si algo falla con "resource already reserved", es esto.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
-import math
 import os
 import sys
 import time
 
 import numpy as np
+
+# Los numeros de la planta viven en UN solo sitio (tools/planta.py):
+# geometria, ley comando->velocidad medida, null, caudal maximo. Estaban
+# duplicados aqui y en gen_excitacion.py, y las areas del cilindro ademas
+# escritas a mano en dos funciones. Si se re-mide la planta, se cambia alli.
+from planta import A_A, A_B, PESO, U_NULL, fuerza_hidraulica
 
 try:
     import nidaqmx
@@ -171,16 +199,6 @@ CANALES_AI = {
 }
 
 
-def fuerza_hidraulica(P_A_bar, P_B_bar):
-    """Fuerza neta del actuador [kN] a partir de las DOS presiones.
-
-    El cilindro es ASIMETRICO, asi que NO vale A_p*(P_A - P_B):
-        F = P_A*A_A - P_B*A_B     con A_A = 201.06 cm2, A_B = 122.52 cm2
-    Es una medida de fuerza independiente de la celda de carga.
-    """
-    A_A, A_B = 0.0201062, 0.0122522          # [m^2]
-    return (np.asarray(P_A_bar) * 1e5 * A_A -
-            np.asarray(P_B_bar) * 1e5 * A_B) / 1e3
 CANAL_AO = "ao0"          # comando a la servovalvula (via amplificador)
 
 # --- SALIDAS DIGITALES (NI 9472) -------------------------------------------
@@ -291,6 +309,46 @@ def _ai_chan(mods: dict, ch: str) -> str:
 def _ao_chan(mods: dict) -> str:
     return f"{mods['ao']}/{CANAL_AO}"
 
+# --- Atajos para abrir tareas -----------------------------------------------
+# La misma media docena de lineas aparecia SIETE veces en el fichero. Ademas de
+# ruido, era una trampa: cambiar el `terminal_config` o el rango habia que
+# acordarse de hacerlo en los siete sitios.
+
+def _abre_ai(tarea, mods: dict, canales=None):
+    """Anade los canales AI a `tarea` y la devuelve, para poder encadenar."""
+    for ch in (canales or CANALES_AI):
+        tarea.ai_channels.add_ai_voltage_chan(
+            _ai_chan(mods, ch), min_val=-10.0, max_val=10.0,
+            terminal_config=TerminalConfiguration.DIFF)
+    return tarea
+
+
+def _abre_ao(tarea, mods: dict):
+    """Anade el canal de comando a la servovalvula y devuelve la tarea."""
+    tarea.ao_channels.add_ao_voltage_chan(_ao_chan(mods), min_val=-10.0,
+                                          max_val=10.0)
+    return tarea
+
+
+def lee_bloque(mods: dict, n: int = 1000, fs: float = 1000.0, canales=None):
+    """Una rafaga de `n` muestras de los AI a `fs` Hz. SOLO LECTURA.
+
+    Devuelve el array crudo [n_canales, n] en VOLTIOS. Para pasarlo a unidades
+    de ingenieria, `a_ingenieria`.
+    """
+    with nidaqmx.Task() as t:
+        _abre_ai(t, mods, canales)
+        t.timing.cfg_samp_clk_timing(fs, sample_mode=AcquisitionType.FINITE,
+                                     samps_per_chan=n)
+        return np.array(t.read(number_of_samples_per_channel=n,
+                               timeout=max(10.0, 3 * n / fs)))
+
+
+def a_ingenieria(d, canales=None) -> dict:
+    """Bloque de voltios -> dict {nombre: media en unidades de ingenieria}."""
+    cs = [CANALES_AI[c] for c in (canales or CANALES_AI)]
+    return {c["nombre"]: float(escala(d[i], c).mean()) for i, c in enumerate(cs)}
+
 
 # ============================================================================
 # 3. DIAGNOSTICO — SOLO LECTURA
@@ -350,7 +408,19 @@ def diag() -> dict:
     print("   * si un canal esta clavado a 0 V exactos o a fondo de escala, el")
     print("     cableado o el reparto de CANALES_AI no es el que se supone.")
     print("   * la posicion leida debe coincidir con la que se ve en el equipo:")
-    print("     es la comprobacion de que la escala 0-10 V -> 0-400 mm es correcta.")
+    print("     es la comprobacion de que la escala 0-10 V -> 0-150 mm es correcta.")
+
+    # Comprobacion CRUZADA de fuerza: la celda y las dos presiones son cadenas
+    # independientes, asi que compararlas detecta un sensor caido o una escala
+    # mal puesta sin tener que mover nada. Ojo al interpretarla sin probeta: la
+    # celda mide la reaccion EXTERNA (marca ~0) y las presiones dan la fuerza
+    # INTERNA del cilindro, que equilibra el peso.
+    e = a_ingenieria(data)
+    F_hid = fuerza_hidraulica(e["presion_A"], e["presion_B"])
+    print(f"{chr(10)}  Fuerza por dos caminos independientes:")
+    print(f"    celda de carga            : {e['fuerza']:+7.3f} kN")
+    print(f"    P_A*A_A - P_B*A_B         : {F_hid:+7.3f} kN")
+    print(f"    peso del conjunto movil   : {PESO/1e3:+7.3f} kN (siempre hacia +)")
     return mods
 
 
@@ -359,11 +429,7 @@ def lee_sensores(mods: dict, secs: float = 10.0, fs: float = 100.0) -> None:
     n = int(fs * secs)
     print(f"\nLectura en vivo {secs:.0f} s a {fs:.0f} Hz  (SOLO LECTURA)")
     with nidaqmx.Task() as t:
-        for ch in CANALES_AI:
-            t.ai_channels.add_ai_voltage_chan(
-                _ai_chan(mods, ch), min_val=-10.0, max_val=10.0,
-                terminal_config=TerminalConfiguration.DIFF,
-            )
+        _abre_ai(t, mods)
         t.timing.cfg_samp_clk_timing(fs, sample_mode=AcquisitionType.CONTINUOUS)
         t.start()
         t0 = time.perf_counter()
@@ -380,12 +446,12 @@ def lee_sensores(mods: dict, secs: float = 10.0, fs: float = 100.0) -> None:
 
 
 # ============================================================================
-# 4. ESTADO SEGURO Y LATENCIA
+# 4. ESTADO SEGURO Y LATENCIA DEL LAZO
 # ============================================================================
 def pon_cero(mods: dict) -> None:
     """Escribe 0 V en el AO: el estado seguro (carrete en null nominal)."""
     with nidaqmx.Task() as t:
-        t.ao_channels.add_ao_voltage_chan(_ao_chan(mods), min_val=-10.0, max_val=10.0)
+        _abre_ao(t, mods)
         t.write(0.0, auto_start=True)
     print("[ok] AO a 0.000 V")
 
@@ -404,7 +470,7 @@ def mide_latencia(mods: dict, n: int = 2000, fs_obj: float = 100.0) -> None:
     t_wr = np.empty(n)
 
     with nidaqmx.Task() as tao, nidaqmx.Task() as tai:
-        tao.ao_channels.add_ao_voltage_chan(_ao_chan(mods), min_val=-10.0, max_val=10.0)
+        _abre_ao(tao, mods)
         tai.ai_channels.add_ai_voltage_chan(
             _ai_chan(mods, "ai0"), min_val=-10.0, max_val=10.0,
             terminal_config=TerminalConfiguration.DIFF,
@@ -454,7 +520,7 @@ def mide_latencia(mods: dict, n: int = 2000, fs_obj: float = 100.0) -> None:
 
 
 # ============================================================================
-# 4b. DIGITALES: ESTADO E, HPU
+# 5. DIGITALES: ENCLAVAMIENTOS Y ARRANQUE DE LA HPU
 # ============================================================================
 def lee_di(mods: dict) -> list:
     """Lee las 8 entradas digitales del NI 9421. SOLO LECTURA."""
@@ -566,10 +632,7 @@ def set_hpu(mods: dict, encender: bool, espera: float = 3.0) -> None:
             print("  -> NINGUNA DI ha cambiado. O la UPH no ha arrancado, o el")
             print("     estado del motor no esta cableado a este modulo.")
         with nidaqmx.Task() as t:
-            for ch in CANALES_AI:
-                t.ai_channels.add_ai_voltage_chan(
-                    _ai_chan(mods, ch), min_val=-10.0, max_val=10.0,
-                    terminal_config=TerminalConfiguration.DIFF)
+            _abre_ai(t, mods)
             t.timing.cfg_samp_clk_timing(1000.0, sample_mode=AcquisitionType.FINITE,
                                          samps_per_chan=1000)
             d = np.array(t.read(number_of_samples_per_channel=1000))
@@ -583,7 +646,7 @@ def set_hpu(mods: dict, encender: bool, espera: float = 3.0) -> None:
 
 
 # ============================================================================
-# 4b-bis. CALIBRACION DE LOS TRANSDUCTORES DE PRESION
+# 6. CALIBRACION DE LOS TRANSDUCTORES DE PRESION
 # ============================================================================
 # PUNTO CERO, medido el 2026-08-12 con la UPH apagada y los DOS MANOMETROS a 0
 # (confirmado por el laboratorio). Es la mitad de una calibracion de dos puntos:
@@ -631,10 +694,10 @@ def calibra_presion(mods: dict, man_A: float | None, man_B: float | None,
     # (CLAUDE.md §5.3), y ademas se vigila la posicion.
     pon_cero(mods)
     with PuertoDO(mods) as do, nidaqmx.Task() as tao:
-        tao.ao_channels.add_ao_voltage_chan(_ao_chan(mods), min_val=-10.0, max_val=10.0)
-        tao.write(U_NULL_MEDIDO, auto_start=True)
+        _abre_ao(tao, mods)
+        tao.write(U_NULL, auto_start=True)
         do.hpu(True)
-        print(f"\n  UPH en marcha, AO a {U_NULL_MEDIDO:+.3f} V (velocidad nula).")
+        print(f"\n  UPH en marcha, AO a {U_NULL:+.3f} V (velocidad nula).")
         print("  La planta se queda QUIETA todo el rato; se vigila la posicion.")
         with nidaqmx.Task() as t:
             for ch in ("ai2", "ai3", "ai0"):
@@ -690,7 +753,7 @@ def calibra_presion(mods: dict, man_A: float | None, man_B: float | None,
         deriva = (xs[-1] - xs[0]) / secs
         print(f"\n  POSICION durante la ventana: {xs[0]:.2f} -> {xs[-1]:.2f} mm "
               f"({deriva*60:+.3f} mm/min)")
-        print(f"  (sostenida en {U_NULL_MEDIDO:+.3f} V; si la deriva residual es")
+        print(f"  (sostenida en {U_NULL:+.3f} V; si la deriva residual es")
         print("   pequenia, confirma que ese es el comando de velocidad nula)")
 
     V1A, V1B = float(np.mean(vA)), float(np.mean(vB))
@@ -732,7 +795,7 @@ def calibra_presion(mods: dict, man_A: float | None, man_B: float | None,
 
 
 # ============================================================================
-# 4c. PRIMEROS MOVIMIENTOS: SENTIDO, GANANCIA Y RECOLOCACION
+# 7. MANIOBRAS QUE MUEVEN EL ACTUADOR
 # ============================================================================
 def _lee_estado(tai) -> dict:
     """Lee un bloque corto y devuelve las medias en unidades de ingenieria."""
@@ -792,13 +855,6 @@ def _descubre_sentido(tao, tai, u_tanteo: float = 1.0, t_tanteo: float = 3.0,
 # quedara 180 s clavado a 0.55 mm del destino: con Kp=0.08 el lazo pedia 0.044 V,
 # muy por debajo del umbral. Un lazo P puro NO PUEDE cerrar el ultimo tramo de
 # posicion en esta planta.
-# Rectas MEDIDAS en el barrido completo del 2026-08-12 (13 escalones):
-#     u > 0 :  v = 0.4459*u + 0.1139        u < 0 :  v = 0.3779*u + 0.1397
-# El comando de VELOCIDAD NULA no es 0 V: el actuador esta en vertical con el
-# peso colgando y a 0 V desciende a +0.14 mm/s (CLAUDE.md §5.3).
-K_POS_MEDIDA, B_POS_MEDIDA = 0.4459, 0.1139
-K_NEG_MEDIDA, B_NEG_MEDIDA = 0.3779, 0.1397
-U_NULL_MEDIDO = -B_NEG_MEDIDA / K_NEG_MEDIDA          # = -0.370 V
 
 
 def _recoloca(tao, tai, destino: float, signo: float, u_max_jog: float = 1.0,
@@ -807,13 +863,13 @@ def _recoloca(tao, tai, destino: float, signo: float, u_max_jog: float = 1.0,
     abiertas. Devuelve True si llego.
 
     Lleva COMPENSACION DEL NULL, que es un feedforward en toda regla: el comando
-    de velocidad nula NO es 0 V sino U_NULL_MEDIDO = -0.370 V (el actuador esta
+    de velocidad nula NO es 0 V sino U_NULL = -0.370 V (el actuador esta
     en vertical y a 0 V desciende solo). Sin ese termino, el lazo P pide
     tensiones cercanas a 0 que en realidad ordenan BAJAR a 0.14 mm/s, y el
     vastago se aleja del destino mientras el lazo cree estar corrigiendo.
     Se comprobo: tres barridos abortaron por esto.
 
-        u = U_NULL_MEDIDO + Kp * error * signo
+        u = U_NULL + Kp * error * signo
 
     Es, en pequenio, la misma idea que el feedforward no lineal que tendra que
     aprender la red.
@@ -839,7 +895,7 @@ def _recoloca(tao, tai, destino: float, signo: float, u_max_jog: float = 1.0,
                 print(f"\r  [ok] en {e['posicion']:.2f} mm (error {err:+.2f} mm)"
                       + " " * 20)
             return True
-        u = U_NULL_MEDIDO + Kp * err * signo       # feedforward del null + P
+        u = U_NULL + Kp * err * signo       # feedforward del null + P
         u = float(np.clip(u, -u_max_jog, u_max_jog))
         tao.write(u)
         if verboso:
@@ -887,11 +943,8 @@ def caracteriza(mods: dict, u_lista=None, t_paso: float = 2.5,
     fs = 100.0
     res = []
     with nidaqmx.Task() as tao, nidaqmx.Task() as tai:
-        tao.ao_channels.add_ao_voltage_chan(_ao_chan(mods), min_val=-10.0, max_val=10.0)
-        for ch in CANALES_AI:
-            tai.ai_channels.add_ai_voltage_chan(
-                _ai_chan(mods, ch), min_val=-10.0, max_val=10.0,
-                terminal_config=TerminalConfiguration.DIFF)
+        _abre_ao(tao, mods)
+        _abre_ai(tai, mods)
         tai.timing.cfg_samp_clk_timing(fs, sample_mode=AcquisitionType.CONTINUOUS)
         tao.write(0.0, auto_start=True)
         tai.start()
@@ -1014,7 +1067,6 @@ def satura(mods: dict, u_test: float = 10.0, margen: float = 6.0,
     print("=" * 74)
     print(f"PRUEBA DE SATURACION DE CAUDAL  (|u| = {u_test:.1f} V sostenido)")
     print("=" * 74)
-    A_A, A_B = 0.0201062, 0.0122522
     print(f"  recorrido: entre {X_MIN_SEG+margen:.0f} y {X_MAX_SEG-margen:.0f} mm, "
           f"en los dos sentidos")
     print(f"  si la bomba da 1.7 L/min, las mesetas serian "
@@ -1028,11 +1080,8 @@ def satura(mods: dict, u_test: float = 10.0, margen: float = 6.0,
     x_lo, x_hi = X_MIN_SEG + margen, X_MAX_SEG - margen
     reg = {}
     with nidaqmx.Task() as tao, nidaqmx.Task() as tai:
-        tao.ao_channels.add_ao_voltage_chan(_ao_chan(mods), min_val=-10.0, max_val=10.0)
-        for ch in CANALES_AI:
-            tai.ai_channels.add_ai_voltage_chan(
-                _ai_chan(mods, ch), min_val=-10.0, max_val=10.0,
-                terminal_config=TerminalConfiguration.DIFF)
+        _abre_ao(tao, mods)
+        _abre_ai(tai, mods)
         tai.timing.cfg_samp_clk_timing(fs, sample_mode=AcquisitionType.CONTINUOUS)
         tao.write(0.0, auto_start=True)
         tai.start()
@@ -1056,9 +1105,9 @@ def satura(mods: dict, u_test: float = 10.0, margen: float = 6.0,
             # cuanto dura de verdad el transitorio tras arrancar la bomba.
             if calienta > 0:
                 print(f"\n  --- calentamiento: {calienta:.0f} s sosteniendo "
-                      f"{U_NULL_MEDIDO:+.3f} V ---")
+                      f"{U_NULL:+.3f} V ---")
                 centro = 0.5 * (x_lo + x_hi)
-                tao.write(U_NULL_MEDIDO)
+                tao.write(U_NULL)
                 tw, xw, pw = [], [], []
                 t0 = time.perf_counter()
                 ult = -30.0
@@ -1071,7 +1120,7 @@ def satura(mods: dict, u_test: float = 10.0, margen: float = 6.0,
                         tao.write(0.0)
                         _recoloca(tao, tai, centro, signo, u_max_jog=2.0,
                                   t_max=120.0, verboso=False)
-                        tao.write(U_NULL_MEDIDO)
+                        tao.write(U_NULL)
                     if el - ult >= 30.0:
                         ult = el
                         print(f"    t={el:5.0f}s  x={e['posicion']:7.2f} mm  "
@@ -1082,7 +1131,7 @@ def satura(mods: dict, u_test: float = 10.0, margen: float = 6.0,
                 if len(tw) - w > 10:
                     vw = np.array([np.polyfit(tw[i:i+w], xw[i:i+w], 1)[0]
                                    for i in range(len(tw) - w)])
-                    print(f"    deriva sostenida en {U_NULL_MEDIDO:+.3f} V: "
+                    print(f"    deriva sostenida en {U_NULL:+.3f} V: "
                           f"{vw[0]:+.4f} -> {vw[-1]:+.4f} mm/s")
                     print(f"    presion A: {pw[0]:.1f} -> {pw[-1]:.1f} bar "
                           f"({'ASENTADA' if abs(pw[-1]-pw[-len(pw)//4]) < 1.0 else 'AUN CAMBIANDO'})")
@@ -1193,11 +1242,8 @@ def jog(mods: dict, destino: float, u_max_jog: float = 2.0, tol: float = 1.0,
     fs = 100.0
     signo = 0.0          # 0 = aun por determinar
     with nidaqmx.Task() as tao, nidaqmx.Task() as tai:
-        tao.ao_channels.add_ao_voltage_chan(_ao_chan(mods), min_val=-10.0, max_val=10.0)
-        for ch in CANALES_AI:
-            tai.ai_channels.add_ai_voltage_chan(
-                _ai_chan(mods, ch), min_val=-10.0, max_val=10.0,
-                terminal_config=TerminalConfiguration.DIFF)
+        _abre_ao(tao, mods)
+        _abre_ai(tai, mods)
         tai.timing.cfg_samp_clk_timing(fs, sample_mode=AcquisitionType.CONTINUOUS)
         tao.write(0.0, auto_start=True)
         tai.start()
@@ -1215,7 +1261,7 @@ def jog(mods: dict, destino: float, u_max_jog: float = 2.0, tol: float = 1.0,
 
 
 # ============================================================================
-# 5. CAPTURA CON TEMPORIZACION POR HARDWARE Y SUPERVISION
+# 8. CAPTURA CON TEMPORIZACION POR HARDWARE Y SUPERVISION
 # ============================================================================
 def captura(mods: dict, ruta_exc: str, etiqueta: str, fs: float = 1000.0,
             buffer_s: float = 0.3, armar: bool = False) -> None:
@@ -1258,11 +1304,7 @@ def captura(mods: dict, ruta_exc: str, etiqueta: str, fs: float = 1000.0,
     # ---- comprobacion previa: SIEMPRE, aunque no se arme ---------------
     print("\n  Comprobacion previa (solo lectura):")
     with nidaqmx.Task() as t:
-        for ch in CANALES_AI:
-            t.ai_channels.add_ai_voltage_chan(
-                _ai_chan(mods, ch), min_val=-10.0, max_val=10.0,
-                terminal_config=TerminalConfiguration.DIFF,
-            )
+        _abre_ai(t, mods)
         t.timing.cfg_samp_clk_timing(1000.0, sample_mode=AcquisitionType.FINITE,
                                      samps_per_chan=500)
         d0 = np.array(t.read(number_of_samples_per_channel=500))
@@ -1294,16 +1336,12 @@ def captura(mods: dict, ruta_exc: str, etiqueta: str, fs: float = 1000.0,
 
     with nidaqmx.Task() as tao, nidaqmx.Task() as tai:
         # AI: continuo, es el reloj maestro
-        for ch in CANALES_AI:
-            tai.ai_channels.add_ai_voltage_chan(
-                _ai_chan(mods, ch), min_val=-10.0, max_val=10.0,
-                terminal_config=TerminalConfiguration.DIFF,
-            )
+        _abre_ai(tai, mods)
         tai.timing.cfg_samp_clk_timing(fs, sample_mode=AcquisitionType.CONTINUOUS,
                                        samps_per_chan=n_buf * 8)
 
         # AO: continuo, arranca con el trigger del AI -> alineacion por hardware
-        tao.ao_channels.add_ao_voltage_chan(_ao_chan(mods), min_val=-10.0, max_val=10.0)
+        _abre_ao(tao, mods)
         tao.timing.cfg_samp_clk_timing(fs, sample_mode=AcquisitionType.CONTINUOUS,
                                        samps_per_chan=n_buf * 8)
         tao.out_stream.regen_mode = RegenerationMode.DONT_ALLOW_REGENERATION

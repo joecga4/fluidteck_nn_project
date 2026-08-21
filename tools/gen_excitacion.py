@@ -19,21 +19,23 @@ Las tres restricciones que hacen este problema distinto
 -------------------------------------------------------
 1. LA PLANTA ES UN INTEGRADOR (CLAUDE.md §3.3). El comando fija la VELOCIDAD, no
    la posicion. Un tramo de amplitud u y duracion T consume un RECORRIDO
-   dx = K*u*T. Con solo 150 mm de carrera util y ~9 mm/s a fondo de escala, la
-   carrera se agota en 17 SEGUNDOS de comando constante. La secuencia tiene que
+   dx = v(u)*T. Con solo 150 mm de carrera util y 2.6 mm/s de tope al extender
+   (el caudal de la bomba satura ahi), la carrera se agota en menos de un minuto
+   de comando constante. La secuencia tiene que
    PLEGARSE sobre si misma: cuando se acerca a un extremo, cambia de signo.
    Ese plegado es la diferencia principal frente a una APRBS de libro.
 
-2. EL ENSAYO REAL OCURRE AL 0.02–2% DEL COMANDO (CLAUDE.md §6.1.1). Las normas
-   piden 0.1 y 1.5 mm/min. Si repartimos las amplitudes de forma uniforme, casi
-   ninguna muestra caera en esa banda y el modelo sera excelente donde no importa.
-   Por eso las amplitudes se sortean con reparto ~LOGARITMICO, no uniforme.
+2. EL ENSAYO REAL OCURRE PEGADO AL NULL. Las normas piden 0.1 y 1.5 mm/min, que
+   son comandos de -0.365 y -0.304 V: separados 62 mV y a un lado del cruce por
+   cero. Si repartimos las amplitudes de forma uniforme casi ninguna muestra cae
+   ahi, y el modelo sale excelente donde no importa. Por eso se sortea la
+   VELOCIDAD de forma logaritmica y se despeja el comando (`u_para_vel`), no al
+   reves: muestrear el comando no garantiza cubrir las velocidades utiles.
 
-3. LA GANANCIA REAL NO SE CONOCE con un factor de 6.5x (CLAUDE.md §5.1, §8). El
-   plegado depende de la ganancia para predecir donde va a estar el vastago. Por
-   eso `--K` es un parametro explicito y el disenio se hace con MARGEN; y por eso
-   `daq.py` supervisa la posicion en tiempo real durante la emision en vez de
-   confiar en esta prediccion (nunca lanzar la secuencia "a ciegas").
+3. LA GANANCIA YA ESTA MEDIDA, pero se disenia igual con margen. El plegado
+   necesita predecir donde estara el vastago, y esa prediccion usa la ley medida
+   (planta.py). Aun asi `daq.py` supervisa la posicion en tiempo real durante la
+   emision: una secuencia de 10 minutos nunca se lanza "a ciegas".
 
 Que produce
 -----------
@@ -47,8 +49,8 @@ Uso
     python tools/gen_excitacion.py --seed 1 --etiqueta train --plot
     python tools/gen_excitacion.py --seed 7 --etiqueta val   --plot
 
-    # con la ganancia REAL una vez medida en la Fase 0
-    python tools/gen_excitacion.py --seed 1 --etiqueta train --K 0.62
+    # forzando otro null (p.ej. si se re-mide con el aceite mas caliente)
+    python tools/gen_excitacion.py --seed 1 --etiqueta train --u-null -0.41
 
     # ademas, fisica de dos camaras sobre un trozo (presiones, transitorios)
     python tools/gen_excitacion.py --seed 1 --etiqueta train --sim-completo
@@ -68,49 +70,18 @@ import numpy as np
 
 
 # ============================================================================
-# GANANCIAS MEDIDAS EN EL EQUIPO (2026-08-12) — mandan sobre el modelo
+# LOS NUMEROS DE LA PLANTA vienen de tools/planta.py, que es la fuente unica.
 # ============================================================================
-# Barrido de 13 escalones con la UPH en marcha y sin probeta. Ambas ramas
-# resultaron casi perfectamente lineales (R2 ~ 0.999):
-#     u > 0 :  v = 0.4459*u + 0.1139
-#     u < 0 :  v = 0.3779*u + 0.1397
-# Datos crudos en results/caracterizacion_2026-08-12.csv, analisis en CLAUDE.md §5.3.
+# Estaban duplicados aqui y en daq.py, con nombres distintos. Si se vuelve a
+# medir la planta, se cambia en planta.py y todo el proyecto lo sigue.
 #
-# Lo importante para disenar la excitacion: el termino independiente NO es cero.
-# Hay una deriva de +0.14 mm/s a comando nulo, asi que la VELOCIDAD CERO se
-# consigue con u ~ -0.37 V, no con 0 V. Una secuencia disenada suponiendo el
-# null en el origen deriva sistematicamente hacia el positivo y se sale de la
-# ventana. Por eso el plegado usa estas rectas y no las del modelo.
-K_POS_MEDIDA, B_POS_MEDIDA = 0.4459, 0.1139     # [mm/s por V], [mm/s]
-K_NEG_MEDIDA, B_NEG_MEDIDA = 0.3779, 0.1397
-
-# Comando que da VELOCIDAD CERO. Es el centro real de la planta, y no es 0 V.
-U_NULL = -B_NEG_MEDIDA / K_NEG_MEDIDA           # = -0.370 V
-
-
-def vel_medida(u):
-    """Velocidad [mm/s] que produce el comando u [V], segun lo MEDIDO."""
-    u = np.asarray(u, dtype=float)
-    return np.where(u >= 0.0,
-                    K_POS_MEDIDA * u + B_POS_MEDIDA,
-                    K_NEG_MEDIDA * u + B_NEG_MEDIDA)
-
-
-def u_para_vel(v: float, u_max: float = 10.0) -> float:
-    """Comando [V] que produce la velocidad `v` [mm/s]. Inversa de vel_medida.
-
-    Se disenia la excitacion en el espacio de VELOCIDADES y luego se despeja el
-    comando, no al reves. Motivo: muestrear el comando de forma logaritmica NO
-    garantiza cobertura en velocidad una vez que el null esta desplazado. Se
-    comprobo — con muestreo en comando, la banda del ensayo de viga
-    (0.05-0.2 mm/min) se quedaba con el 0.0% de las muestras.
-    """
-    if v >= B_POS_MEDIDA:
-        u = (v - B_POS_MEDIDA) / K_POS_MEDIDA
-    else:
-        u = (v - B_NEG_MEDIDA) / K_NEG_MEDIDA
-    return float(np.clip(u, -u_max, u_max))
-
+# Lo que importa para disenar la excitacion: el termino independiente de la
+# ley medida NO es cero. Hay deriva a comando nulo, asi que la velocidad cero
+# se consigue en U_NULL ~ -0.37 V. Una secuencia disenada suponiendo el null
+# en el origen deriva hacia el positivo y se sale de la ventana: se comprobo,
+# y el 47 % de las muestras acababa fuera.
+from planta import (K_POS, B_POS, K_NEG, B_NEG, U_NULL,
+                    vel_medida, u_para_vel)
 
 # ============================================================================
 # 1. DISENIO DE LA SECUENCIA
@@ -121,12 +92,10 @@ def disenia_secuencia(
     u_max: float = 10.0,
     v_min: float = 0.05 / 60.0,   # [mm/s] = 0.05 mm/min, media decada por
     v_max: float = 4.0,           #         debajo del ensayo de viga
-    u_min_rel: float = 0.002,
-    K: float = 0.446,
     x0: float = 75.0,
-    x_lo: float = 20.0,
-    x_hi: float = 130.0,
-    dx_obj: float = 2.0,
+    x_lo: float = 25.0,
+    x_hi: float = 125.0,
+    dx_obj: float = 8.0,
     t_rap_min: float = 0.05,
     t_rap_max: float = 0.60,
     t_reg_min: float = 1.0,
@@ -149,7 +118,7 @@ def disenia_secuencia(
                           cambiar el comando de golpe. Son los tramos donde una
                           red le gana a un PID (anticipacion).
       REGIMEN (resto)     duracion por presupuesto de recorrido,
-                          T = dx_obj/(K*|u|) acotada a [t_reg_min, t_reg_max].
+                          T = dx_obj/|v(u)| acotada a [t_reg_min, t_reg_max].
                           Ensenia el MAPA ESTATICO comando->velocidad. Como la
                           duracion sale del recorrido, las amplitudes pequenias
                           reciben tramos LARGOS (que es justo lo que hace falta
@@ -166,10 +135,10 @@ def disenia_secuencia(
     dur_total : duracion objetivo [s]
     Ts        : periodo de muestreo del AO [s] (1 ms = 1 kHz)
     u_max     : fondo de escala del comando [V]
-    u_min_rel : amplitud minima como FRACCION de u_max. 0.002 -> 20 mV, que es
-                el orden del ensayo de viga (CLAUDE.md §6.1.1).
-    K         : ganancia de velocidad [mm/s por voltio]. INCIERTA (§8): sirve
-                para predecir el recorrido y decidir el plegado.
+    v_min,v_max : rango de VELOCIDADES a cubrir [mm/s]. v_min baja media decada
+                por debajo del ensayo de viga para que esa banda quede poblada.
+    u_null    : comando de velocidad nula sobre el que centrar el disenio.
+                Por defecto el medido; se cambia si el null se ha movido.
     x0        : posicion inicial del vastago [mm]
     x_lo,x_hi : ventana de posicion SEGURA [mm]. Estrictamente interior a los
                 topes: la carrera util del actuador es 0..150 mm.
@@ -225,7 +194,12 @@ def disenia_secuencia(
         if clase == "cero":
             u = 0.0
         else:
-            u = u_para_vel(signo * v_obj, u_max)
+            # `u_para_vel` despeja el comando con el null MEDIDO. Si se pide
+            # disenar para otro null (el aceite mas caliente, otra sesion), se
+            # traslada el resultado: se conserva el reparto de velocidades y se
+            # mueve el centro. Sin esto la opcion no hacia absolutamente nada.
+            u = u_para_vel(signo * v_obj, u_max) + (u_null - U_NULL)
+            u = float(np.clip(u, -u_max, u_max))
 
         # ---- 3. duracion segun la clase ----------------------------------
         v_pred = float(vel_medida(u))
@@ -265,7 +239,6 @@ def disenia_secuencia(
         "u": u_s,
         "tramos": tramos,
         "Ts": Ts,
-        "K": K,
         "x0": x0,
         "ventana": (x_lo, x_hi),
         "seed": seed,
@@ -364,8 +337,8 @@ def valida_con_simulador(sec: dict, completo: bool = False,
 
     # --- cinematico, con las ganancias MEDIDAS ----------------------------
     if usar_medido:
-        K_ext, b_ext = K_POS_MEDIDA, B_POS_MEDIDA
-        K_ret, b_ret = K_NEG_MEDIDA, B_NEG_MEDIDA
+        K_ext, b_ext = K_POS, B_POS
+        K_ret, b_ret = K_NEG, B_NEG
         fuente = "MEDIDAS en el equipo (2026-08-12)"
     else:
         K_ext, K_ret = p.K_vel(True) * 1e3, p.K_vel(False) * 1e3
@@ -392,10 +365,11 @@ def valida_con_simulador(sec: dict, completo: bool = False,
     fuera = (x < x_lo) | (x > x_hi)
     if fuera.any():
         print(f"    !! {fuera.sum()} muestras ({fuera.mean()*100:.1f}%) FUERA de la ventana")
-        print("       -> la K con la que se disenio no coincide con la del modelo.")
-        print(f"          Regenerar con  --K {(K_ext+abs(K_ret))/2:.3f}")
+        print("       -> estrechar la ventana (--xlo/--xhi) o acortar los tramos")
+        print("          de regimen (--dx). La secuencia se pliega dentro de la")
+        print("          ventana, pero si los tramos son largos puede rebasarla.")
         print("       Aun asi, la red de seguridad real es la supervision en vivo")
-        print("       de daq.py: la ganancia verdadera no se conoce hasta la Fase 0.")
+        print("       de daq.py: nunca se lanza la secuencia a ciegas.")
     else:
         print("    [ok] la secuencia se mantiene dentro de la ventana")
 
@@ -473,16 +447,13 @@ def main() -> None:
     ap.add_argument("--etiqueta", default="train", help="train | val | ...")
     ap.add_argument("--dur", type=float, default=600.0, help="duracion [s]")
     ap.add_argument("--Ts", type=float, default=0.001, help="periodo del AO [s]")
-    ap.add_argument("--K", type=float, default=0.446,
-                    help="ganancia mm/s por V (informativa: el disenio usa las "
-                         "ramas medidas de vel_medida)")
     ap.add_argument("--u-null", type=float, default=U_NULL,
                     help="comando de velocidad cero [V] (medido: -0.370)")
     ap.add_argument("--umax", type=float, default=10.0)
     ap.add_argument("--x0", type=float, default=75.0, help="posicion inicial [mm]")
-    ap.add_argument("--xlo", type=float, default=20.0, help="limite inferior [mm]")
-    ap.add_argument("--xhi", type=float, default=130.0, help="limite superior [mm]")
-    ap.add_argument("--dx", type=float, default=2.0, help="recorrido por tramo [mm]")
+    ap.add_argument("--xlo", type=float, default=25.0, help="limite inferior [mm]")
+    ap.add_argument("--xhi", type=float, default=125.0, help="limite superior [mm]")
+    ap.add_argument("--dx", type=float, default=8.0, help="recorrido por tramo [mm]")
     ap.add_argument("--plot", action="store_true")
     ap.add_argument("--sin-sim", action="store_true", help="no validar con el simulador")
     ap.add_argument("--usar-modelo", action="store_true",
@@ -492,8 +463,9 @@ def main() -> None:
     args = ap.parse_args()
 
     sec = disenia_secuencia(
-        dur_total=args.dur, Ts=args.Ts, u_max=args.umax, K=args.K,
-        x0=args.x0, x_lo=args.xlo, x_hi=args.xhi, dx_obj=args.dx, seed=args.seed,
+        dur_total=args.dur, Ts=args.Ts, u_max=args.umax,
+        x0=args.x0, x_lo=args.xlo, x_hi=args.xhi, dx_obj=args.dx,
+        u_null=args.u_null, seed=args.seed,
     )
     informe(sec)
     r = (None if args.sin_sim else
