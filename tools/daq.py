@@ -114,7 +114,7 @@ import numpy as np
 # geometria, ley comando->velocidad medida, null, caudal maximo. Estaban
 # duplicados aqui y en gen_excitacion.py, y las areas del cilindro ademas
 # escritas a mano en dos funciones. Si se re-mide la planta, se cambia alli.
-from planta import A_A, A_B, PESO, U_NULL, fuerza_hidraulica
+from planta import A_A, A_B, PESO, U_NULL, V_MAX_EXT, fuerza_hidraulica
 
 try:
     import nidaqmx
@@ -928,14 +928,15 @@ def caracteriza(mods: dict, u_lista=None, t_paso: float = 2.5,
     if u_lista is None:
         # De menor a mayor: si algo va mal, se descubre con el comando mas
         # pequenio, no con el mas grande.
-        u_lista = [0.0, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0]
+        u_lista = [0.0, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 6.0, 8.0, 10.0]
 
     print("=" * 74)
     print("CARACTERIZACION comando -> velocidad")
     print("=" * 74)
     print(f"  amplitudes : {u_lista} V (y sus negativas)")
     print(f"  t por paso : {t_paso} s     recolocacion a {x_obj} mm entre pasos")
-    print(f"  limites    : x en [{X_MIN_SEG}, {X_MAX_SEG}] mm · F < {F_MAX_SEG} kN")
+    print(f"  limites    : x en [{X_MIN_SEG}, {X_MAX_SEG}] mm · F < {F_MAX_SEG} kN · "
+          f"P_A < {PA_MAX_SEG} bar · P_B < {PB_MAX_SEG} bar")
     if not armar:
         print("\n  MODO ENSAYO EN SECO (falta --armar): no se escribe en el AO.")
         return
@@ -981,9 +982,29 @@ def caracteriza(mods: dict, u_lista=None, t_paso: float = 2.5,
                         _recoloca(tao, tai, x_obj, signo, u_max_jog=2.0,
                                   t_max=90.0, verboso=False)
                         e = _lee_estado(tai)
-                    fallo = _comprueba_limites(e)
+                    # Un limite rozado ANTES de un paso suele ser transitorio:
+                    # tras parar el paso anterior las presiones tardan en
+                    # asentarse. Antes esto abortaba el barrido ENTERO de golpe,
+                    # tirando varios minutos de maquina por una condicion que se
+                    # habria despejado sola. Ahora se reintenta antes de rendirse,
+                    # y al rendirse se dice el estado COMPLETO, no solo la causa.
+                    for intento in range(4):
+                        fallo = _comprueba_limites(e)
+                        if not fallo:
+                            break
+                        print(f"    (limite rozado antes de u={u:+.2f} V: {fallo}"
+                              f" — esperando, intento {intento+1}/4)")
+                        tao.write(0.0)
+                        time.sleep(2.0)
+                        e = _lee_estado(tai)
                     if fallo:
                         print(f"  !! ABORTA antes de u={u:+.2f} V: {fallo}")
+                        print("     estado completo en el momento del corte:")
+                        for k, val in e.items():
+                            print(f"       {k:10s} = {val:9.3f}")
+                        print(f"     limites: x en [{X_MIN_SEG}, {X_MAX_SEG}] mm · "
+                              f"F < {F_MAX_SEG} kN · P_A < {PA_MAX_SEG} · "
+                              f"P_B < {PB_MAX_SEG} bar")
                         raise KeyboardInterrupt
 
                     tao.write(u)
@@ -1001,6 +1022,14 @@ def caracteriza(mods: dict, u_lista=None, t_paso: float = 2.5,
                     tao.write(0.0)
                     time.sleep(0.5)
 
+                    # Se descartan los primeros 0.3 s: son el transitorio del
+                    # carrete, no regimen. `satura` ya lo hacia y aqui no, asi
+                    # que las dos pruebas median cosas distintas — y pesa mas
+                    # cuanto mayor es el comando, justo donde interesa.
+                    ts_r = [a for a in ts if a >= 0.3]
+                    xs_r = xs[len(ts) - len(ts_r):]
+                    if len(ts_r) >= 3:
+                        ts, xs = ts_r, xs_r
                     if len(ts) >= 3:
                         v = float(np.polyfit(ts, xs, 1)[0])   # mm/s
                         res.append((u, v))
@@ -1015,23 +1044,50 @@ def caracteriza(mods: dict, u_lista=None, t_paso: float = 2.5,
 
     if not res:
         return
+    # AJUSTE SOLO EN LA ZONA LINEAL. Por encima de U_LINEAL la relacion deja de
+    # ser recta: el caudal de la bomba satura al extender. Y con escalones de
+    # pocos segundos ni siquiera se ve la saturacion, porque el acumulador
+    # aporta caudal mientras dura el paso — MEDIDO: a 10 V un escalon de 2.5 s
+    # da 3.92 mm/s cuando el regimen sostenido es 2.634, un factor 1.5.
+    #
+    # Meter esos puntos en el ajuste ESTROPEA la ganancia: con el barrido hasta
+    # 10 V sale K+ = 0.389 frente a 0.438 usando solo hasta 2 V (13 % baja).
+    # Por eso se ajusta la zona lineal y los altos se reportan aparte.
+    U_LINEAL = 2.5
     print("\n  RESUMEN")
-    pos = [(u, v) for u, v in res if u > 0]
-    neg = [(u, v) for u, v in res if u < 0]
     cero = [v for u, v in res if u == 0]
     if cero:
         print(f"    deriva de null (u=0)      : {cero[0]:+.4f} mm/s")
-    for nom, lst in (("comando positivo", pos), ("comando negativo", neg)):
+
+    lineal = {"positivo": [(u, v) for u, v in res if 0 < u <= U_LINEAL],
+              "negativo": [(u, v) for u, v in res if -U_LINEAL <= u < 0]}
+    aj = {}
+    for nom, lst in lineal.items():
         if len(lst) >= 2:
-            K = float(np.polyfit([u for u, _ in lst], [v for _, v in lst], 1)[0])
-            print(f"    K {nom:22s}: {K:+.4f} mm/s por V")
-    if len(pos) >= 2 and len(neg) >= 2:
-        Kp = float(np.polyfit([u for u, _ in pos], [v for _, v in pos], 1)[0])
-        Kn = float(np.polyfit([u for u, _ in neg], [v for _, v in neg], 1)[0])
+            K, b = np.polyfit([u for u, _ in lst], [v for _, v in lst], 1)
+            aj[nom] = (K, b)
+            print(f"    K comando {nom:12s}: {K:+.4f} mm/s por V   "
+                  f"(v = {K:.4f}u {b:+.4f}, n={len(lst)})")
+    if len(aj) == 2:
+        Kp = aj["positivo"][0]
+        Kn, bn = aj["negativo"]
         print(f"    asimetria |K-/K+|         : {abs(Kn/Kp):.3f}"
-              "   (el modelo de 2 camaras predice 0.772, §5.4)")
-        print(f"\n  -> Regenerar la excitacion con:  --K {abs(Kp):.3f}")
-        print("     y anotar el resultado en CLAUDE.md §5 (cierra la discrepancia de 6x).")
+              "   (el modelo de 2 camaras predice 0.772)")
+        print(f"    velocidad nula en u       : {-bn/Kn:+.3f} V")
+        print(f"\n  -> ajustado SOLO con |u| <= {U_LINEAL} V. Si se quiere que todo")
+        print("     el proyecto lo use, anotarlo en planta.py (K_POS / K_NEG).")
+
+    altos = [(u, v) for u, v in res if abs(u) > U_LINEAL]
+    if altos:
+        print(f"\n  Puntos por encima de {U_LINEAL} V, FUERA del ajuste:")
+        for u, v in sorted(altos):
+            aviso = ""
+            if u > 0 and v > V_MAX_EXT * 1.05:
+                aviso = f"  <- por encima del techo de caudal ({V_MAX_EXT:.2f})"
+            print(f"    u={u:+6.2f} V -> v={v:+8.4f} mm/s{aviso}")
+        print("    Un escalon corto NO mide el regimen a comando alto: el")
+        print("    acumulador aporta caudal durante los primeros segundos.")
+        print("    Para el techo de caudal usar --satura, que recorre la carrera.")
 
 
 def satura(mods: dict, u_test: float = 10.0, margen: float = 6.0,
