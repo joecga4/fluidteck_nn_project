@@ -754,7 +754,8 @@ def _comprueba_limites(e: dict, x_lo: float = X_MIN_SEG,
     return None
 
 
-def _descubre_sentido(tao, tai, u_tanteo: float = 0.3, t_tanteo: float = 1.5) -> float:
+def _descubre_sentido(tao, tai, u_tanteo: float = 1.0, t_tanteo: float = 3.0,
+                      dx_min: float = 0.15) -> float:
     """Determina que signo de comando hace CRECER la posicion medida.
 
     No se puede dar por sabido: depende del cableado del amplificador, de como
@@ -772,10 +773,11 @@ def _descubre_sentido(tao, tai, u_tanteo: float = 0.3, t_tanteo: float = 1.5) ->
     time.sleep(0.5)
     dx = e1["posicion"] - e0["posicion"]
     print(f"  tanteo {u_tanteo:+.2f} V durante {t_tanteo:.1f} s -> dx = {dx:+.3f} mm")
-    if abs(dx) < 0.05:
+    if abs(dx) < dx_min:
         raise SystemExit(
-            "ABORTA: el vastago no se mueve. Comprobar: ¿UPH encendida? "
-            "¿amplificador alimentado? ¿presion de suministro? ¿seta liberada?")
+            f"ABORTA: el vastago apenas se mueve ({dx:+.3f} mm en {t_tanteo:.1f} s "
+            f"con {u_tanteo:+.2f} V). Comprobar: ¿UPH encendida? ¿amplificador "
+            "alimentado? ¿presion de suministro? ¿seta liberada?")
     signo = 1.0 if dx > 0 else -1.0
     print(f"  -> un comando POSITIVO {'AUMENTA' if signo > 0 else 'DISMINUYE'}"
           " la posicion medida")
@@ -977,6 +979,195 @@ def caracteriza(mods: dict, u_lista=None, t_paso: float = 2.5,
               "   (el modelo de 2 camaras predice 0.772, §5.4)")
         print(f"\n  -> Regenerar la excitacion con:  --K {abs(Kp):.3f}")
         print("     y anotar el resultado en CLAUDE.md §5 (cierra la discrepancia de 6x).")
+
+
+def satura(mods: dict, u_test: float = 10.0, margen: float = 6.0,
+           t_max: float = 120.0, fs: float = 200.0, signo_dado: float = 0.0,
+           calienta: float = 180.0, armar: bool = False) -> None:
+    """Mide el TOPE DE CAUDAL de la bomba recorriendo la carrera a comando alto.
+
+    QUE PREGUNTA CONTESTA
+    ---------------------
+    La placa dice 1.7 L/min, que daria un tope de velocidad de 1.41 mm/s
+    extendiendo. Pero en la captura se midieron 2.80 mm/s sostenidos 2.8 s
+    (CLAUDE.md §5.9). La diferencia son 78 cm3 de aceite, que un acumulador de
+    vejiga entrega sin dificultad — asi que ese tramo NO distingue entre
+    "la bomba da mas de 1.7" y "el acumulador estaba aportando".
+
+    Para distinguirlo hay que sostener el comando lo suficiente para VACIAR el
+    acumulador. Si lo hay, la velocidad arranca alta y DECAE a una meseta; esa
+    meseta es Q_bomba/A.
+
+    EL DISCRIMINADOR, y es lo que hace la prueba concluyente
+    --------------------------------------------------------
+    Se recorre la carrera en los DOS sentidos, y se mira la RELACION de las
+    mesetas:
+
+      * limitada por CAUDAL   -> v = Q/A en cada sentido, luego la relacion
+                                 es exactamente A_A/A_B = 1.641
+      * limitada por ORIFICIO -> la relacion es la que ya se midio: 0.847
+
+    Son numeros que no se parecen en nada, asi que no hay ambiguedad posible.
+    Y de paso: 1.641 y 0.847 estan a lados opuestos de 1, o sea que hasta el
+    SENTIDO de la asimetria cambia.
+    """
+    print("=" * 74)
+    print(f"PRUEBA DE SATURACION DE CAUDAL  (|u| = {u_test:.1f} V sostenido)")
+    print("=" * 74)
+    A_A, A_B = 0.0201062, 0.0122522
+    print(f"  recorrido: entre {X_MIN_SEG+margen:.0f} y {X_MAX_SEG-margen:.0f} mm, "
+          f"en los dos sentidos")
+    print(f"  si la bomba da 1.7 L/min, las mesetas serian "
+          f"{1.7/60000/A_A*1e3:.3f} y {1.7/60000/A_B*1e3:.3f} mm/s")
+    print(f"  relacion esperada si SATURA POR CAUDAL : {A_A/A_B:.3f}  (= A_A/A_B)")
+    print(f"  relacion medida en regimen no saturado : 0.847")
+    if not armar:
+        print("\n  MODO ENSAYO EN SECO (falta --armar): no se escribe en el AO.")
+        return
+
+    x_lo, x_hi = X_MIN_SEG + margen, X_MAX_SEG - margen
+    reg = {}
+    with nidaqmx.Task() as tao, nidaqmx.Task() as tai:
+        tao.ao_channels.add_ao_voltage_chan(_ao_chan(mods), min_val=-10.0, max_val=10.0)
+        for ch in CANALES_AI:
+            tai.ai_channels.add_ai_voltage_chan(
+                _ai_chan(mods, ch), min_val=-10.0, max_val=10.0,
+                terminal_config=TerminalConfiguration.DIFF)
+        tai.timing.cfg_samp_clk_timing(fs, sample_mode=AcquisitionType.CONTINUOUS)
+        tao.write(0.0, auto_start=True)
+        tai.start()
+        try:
+            if signo_dado:
+                # El tanteo de sentido es una medida CORTA, y las medidas cortas
+                # tras arrancar la bomba estan contaminadas por un transitorio
+                # que decae despacio (0.55 -> 0.13 mm/s en 14 s, §5.9). Con el
+                # sentido ya conocido de otras sesiones se salta el tanteo: esta
+                # prueba no lo necesita, porque sus tramos duran 40-70 s.
+                signo = float(np.sign(signo_dado))
+                print(f"  sentido IMPUESTO: comando positivo "
+                      f"{'aumenta' if signo > 0 else 'disminuye'} la posicion")
+            else:
+                signo = _descubre_sentido(tao, tai)
+            # ---- CALENTAMIENTO, y de paso se mide el transitorio ---------
+            # En la primera version se esperaba 25 s y NINGUNO de los dos
+            # recorridos llego a regimen: las presiones seguian moviendose al
+            # final de los dos. Aqui se sostiene el comando de velocidad nula
+            # varios minutos y se registra la deriva, que ademas contesta
+            # cuanto dura de verdad el transitorio tras arrancar la bomba.
+            if calienta > 0:
+                print(f"\n  --- calentamiento: {calienta:.0f} s sosteniendo "
+                      f"{U_NULL_MEDIDO:+.3f} V ---")
+                centro = 0.5 * (x_lo + x_hi)
+                tao.write(U_NULL_MEDIDO)
+                tw, xw, pw = [], [], []
+                t0 = time.perf_counter()
+                ult = -30.0
+                while (el := time.perf_counter() - t0) < calienta:
+                    d = np.array(tai.read(number_of_samples_per_channel=int(fs / 5)))
+                    e = {c["nombre"]: float(escala(d[i], c).mean())
+                         for i, c in enumerate(CANALES_AI.values())}
+                    tw.append(el); xw.append(e["posicion"]); pw.append(e["presion_A"])
+                    if abs(e["posicion"] - centro) > 35.0:
+                        tao.write(0.0)
+                        _recoloca(tao, tai, centro, signo, u_max_jog=2.0,
+                                  t_max=120.0, verboso=False)
+                        tao.write(U_NULL_MEDIDO)
+                    if el - ult >= 30.0:
+                        ult = el
+                        print(f"    t={el:5.0f}s  x={e['posicion']:7.2f} mm  "
+                              f"P_A={e['presion_A']:5.1f} bar")
+                tao.write(0.0); time.sleep(1.0)
+                tw = np.array(tw); xw = np.array(xw); pw = np.array(pw)
+                w = max(5, int(round(10.0 / np.median(np.diff(tw)))))
+                if len(tw) - w > 10:
+                    vw = np.array([np.polyfit(tw[i:i+w], xw[i:i+w], 1)[0]
+                                   for i in range(len(tw) - w)])
+                    print(f"    deriva sostenida en {U_NULL_MEDIDO:+.3f} V: "
+                          f"{vw[0]:+.4f} -> {vw[-1]:+.4f} mm/s")
+                    print(f"    presion A: {pw[0]:.1f} -> {pw[-1]:.1f} bar "
+                          f"({'ASENTADA' if abs(pw[-1]-pw[-len(pw)//4]) < 1.0 else 'AUN CAMBIANDO'})")
+                # NO entra en `reg`: si entrara, el bucle de analisis lo
+                # trataria como un recorrido mas y la comparacion de
+                # mesetas entre sentidos dejaria de imprimirse.
+                calent = (tw, xw, pw)
+
+            for nombre, destino, arranque in (("extendiendo", x_hi, x_lo),
+                                              ("retrayendo", x_lo, x_hi)):
+                print(f"\n  --- {nombre}: colocando en {arranque:.0f} mm ---")
+                if not _recoloca(tao, tai, arranque, signo, u_max_jog=2.0,
+                                 t_max=200.0, verboso=False):
+                    print("  !! no se pudo colocar; se salta este sentido")
+                    continue
+                u = u_test * signo * (1 if destino > arranque else -1)
+                print(f"  aplicando u = {u:+.2f} V hasta {destino:.0f} mm...")
+                ts, xs, pas, pbs = [], [], [], []
+                tao.write(u)
+                t0 = time.perf_counter()
+                while (el := time.perf_counter() - t0) < t_max:
+                    d = np.array(tai.read(number_of_samples_per_channel=int(fs / 10)))
+                    e = {c["nombre"]: float(escala(d[i], c).mean())
+                         for i, c in enumerate(CANALES_AI.values())}
+                    ts.append(el); xs.append(e["posicion"])
+                    pas.append(e["presion_A"]); pbs.append(e["presion_B"])
+                    if (destino > arranque and e["posicion"] >= destino) or \
+                       (destino < arranque and e["posicion"] <= destino):
+                        break
+                    if _comprueba_limites(e, X_MIN_JOG, X_MAX_JOG):
+                        break
+                tao.write(0.0)
+                time.sleep(1.0)
+                reg[nombre] = (np.array(ts), np.array(xs), np.array(pas), np.array(pbs))
+                print(f"  {xs[0]:.1f} -> {xs[-1]:.1f} mm en {ts[-1]:.1f} s")
+        finally:
+            tao.write(0.0)
+            tai.stop()
+
+    # ---- analisis --------------------------------------------------------
+    print("\n" + "=" * 74)
+    print("RESULTADO")
+    print("=" * 74)
+    mesetas = {}
+    for nombre, (ts, xs, pa, pb) in reg.items():
+        if len(ts) < 20:
+            print(f"  {nombre}: muy pocos datos"); continue
+        # Velocidad instantanea por ajuste sobre ventana deslizante de 3 s.
+        # El paso se toma como MEDIANA de los intervalos, no como ts[1]-ts[0]:
+        # la primera lectura puede volver casi instantanea y ese unico intervalo
+        # corto hacia w enorme, la lista de velocidades salia vacia y el informe
+        # imprimia NaN sin avisar de nada.
+        w = max(5, int(round(3.0 / np.median(np.diff(ts)))))
+        if len(ts) - w < 10:
+            print(f"  {nombre}: tramo demasiado corto para estimar velocidad")
+            continue
+        vt = np.array([np.polyfit(ts[i:i+w], xs[i:i+w], 1)[0]
+                       for i in range(len(ts) - w)])
+        tv = ts[:len(vt)]
+        v_ini = np.median(vt[:max(3, len(vt)//10)])
+        v_fin = np.median(vt[-max(3, len(vt)//5):])
+        mesetas[nombre] = abs(v_fin)
+        print(f"  {nombre:12s}: v inicial {abs(v_ini):6.3f}  ->  meseta "
+              f"{abs(v_fin):6.3f} mm/s   (caida {(1-abs(v_fin/v_ini))*100:+5.1f} %)")
+        A = A_A if nombre == "extendiendo" else A_B
+        print(f"                caudal implicito = {abs(v_fin)*1e-3*A*60000:.2f} L/min"
+              f"   P_A {pa.mean():5.1f} bar  P_B {pb.mean():5.1f} bar")
+    if len(mesetas) == 2:
+        rel = mesetas["retrayendo"] / mesetas["extendiendo"]
+        print(f"\n  RELACION retraer/extender = {rel:.3f}")
+        print(f"    si estuviera limitada por CAUDAL   : {A_A/A_B:.3f}")
+        print(f"    si estuviera limitada por ORIFICIO : 0.847")
+        d_q = abs(rel - A_A / A_B); d_o = abs(rel - 0.847)
+        print(f"  -> compatible con limitacion por "
+              f"{'CAUDAL (la bomba)' if d_q < d_o else 'ORIFICIO (la servovalvula)'}")
+
+    os.makedirs("results", exist_ok=True)
+    with open("results/saturacion.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f); w.writerow(["sentido", "t_s", "posicion_mm",
+                                       "presion_A_bar", "presion_B_bar"])
+        for nombre, (ts, xs, pa, pb) in reg.items():
+            for i in range(len(ts)):
+                w.writerow([nombre, f"{ts[i]:.4f}", f"{xs[i]:.4f}",
+                            f"{pa[i]:.4f}", f"{pb[i]:.4f}"])
+    print("\n[ok] results/saturacion.csv")
 
 
 def jog(mods: dict, destino: float, u_max_jog: float = 2.0, tol: float = 1.0,
@@ -1224,6 +1415,19 @@ def main() -> None:
                          "a los manometros (defecto 15)")
     ap.add_argument("--caracteriza", action="store_true",
                     help="mide la curva comando->velocidad en ambos sentidos")
+    ap.add_argument("--satura", action="store_true",
+                    help="mide el tope de caudal de la bomba (recorre la carrera "
+                         "con comando alto en los dos sentidos)")
+    ap.add_argument("--u-test", type=float, default=10.0,
+                    help="comando para la saturacion [V]. Por defecto FONDO DE "
+                         "ESCALA: la prueba busca el techo de caudal, y "
+                         "estrangular la valvula al 80%% trabaja en su contra "
+                         "(con 8 V se exigian 3.06 L/min; con 10, unos 5.5).")
+    ap.add_argument("--calienta", type=float, default=180.0,
+                    help="segundos de bomba en marcha antes de medir [s]")
+    ap.add_argument("--signo", type=float, default=0.0,
+                    help="+1/-1 para imponer el sentido y saltarse el tanteo "
+                         "(0 = descubrirlo midiendo)")
     ap.add_argument("--jog", type=float, metavar="MM",
                     help="recoloca el vastago en esa posicion [mm]")
     ap.add_argument("--armar", action="store_true",
@@ -1232,7 +1436,7 @@ def main() -> None:
 
     if not any([args.diag, args.sensores, args.latencia, args.cero, args.captura,
                 args.di, args.hpu, args.caracteriza, args.calibra_presion,
-                args.jog is not None]):
+                args.satura, args.jog is not None]):
         ap.print_help()
         return
 
@@ -1271,16 +1475,20 @@ def main() -> None:
             caracteriza(mods, armar=args.armar)
         if args.jog is not None:
             jog(mods, args.jog, armar=args.armar)
+        if args.satura:
+            satura(mods, u_test=args.u_test, signo_dado=args.signo,
+                   calienta=args.calienta, armar=args.armar)
         if args.captura:
             captura(mods, args.captura, args.etiqueta, fs=args.fs, armar=args.armar)
 
-    hay_maniobra = bool(args.caracteriza or args.jog is not None or args.captura)
+    hay_maniobra = bool(args.caracteriza or args.jog is not None or args.captura
+                        or args.satura)
     if hay_maniobra and args.con_hpu and args.armar:
         with PuertoDO(mods) as do:
             do.hpu(True)
-            print("  esperando 12 s a que se estabilice la presion...")
+            print("  esperando 25 s a que se estabilice la presion...")
             print("  (los primeros segundos tras arrancar la bomba no son fiables: §5.3b)")
-            time.sleep(12.0)
+            time.sleep(25.0)
             try:
                 _maniobras()
             finally:

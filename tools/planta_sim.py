@@ -194,7 +194,25 @@ class ParamsPlanta:
     # --- Circuito ---------------------------------------------------------
     P_s: float = 100e5           # [Pa] presion de suministro (limitadora)
     P_t: float = 2e5             # [Pa] presion de retorno (tanque)
-    Q_bomba: float = 10.0 / 60000  # [m^3/s] (!) tope de caudal de la bomba
+    # TOPE DE CAUDAL — MEDIDO en el equipo (2026-08-13), no de catalogo.
+    # La placa de la UPH dice 1.7 L/min; la medida da 1.9x esa cifra, asi que
+    # manda la medida. Poner 1.7 aqui meteria una saturacion a 1.41 mm/s que
+    # la planta real NO tiene, y el simulador mentiria en toda la banda de
+    # comandos altos.
+    #
+    # Como se midio (tools/daq.py --satura): se recorre la carrera con el
+    # comando a FONDO DE ESCALA y se mira si la velocidad topa. Extendiendo,
+    # subir el comando de 8 a 10 V (+25 %) solo subio la velocidad de 2.536 a
+    # 2.634 mm/s (+3.9 %): la valvula se abre mas y no entra mas aceite. Eso
+    # es el techo, y son 2.634 mm/s * A_A = 3.18 L/min sostenidos 32 s.
+    #
+    # Retrayendo NO satura a 10 V, y no es contradiccion: se llena la camara
+    # ANULAR, asi que ese mismo caudal daria 4.32 mm/s y solo se midieron
+    # 2.711 -> se piden 1.99 L/min, por debajo del techo. Los dos sentidos
+    # estan en regimenes distintos, y por eso la relacion de velocidades pasa
+    # de 0.946 (8 V) a 1.029 (10 V): se mueve hacia A_A/A_B = 1.641 conforme
+    # entra en saturacion, tal como predice el modelo.
+    Q_bomba: float = 3.18 / 60000  # [m^3/s] techo MEDIDO en el equipo
 
     # --- No linealidades (0 = desactivada) --------------------------------
     null_off: float = 0.0
