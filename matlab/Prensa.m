@@ -166,6 +166,39 @@ classdef Prensa < handle
             F = (PA_bar*1e5*Prensa.A_A - PB_bar*1e5*Prensa.A_B)/1e3;
         end
 
+        function r = ajustaDiametro(T)
+        %AJUSTADIAMETRO  A_A y D a partir de escalones de fuerza contra un tope rigido.
+        %   T: tabla con F_kN, VA_V, VB_V (medias de cada escalon, voltios).
+        %   Modelo estatico: F = A_A*(P_A - P_B) + A_r*P_B + c, con A_r = A_A - A_B el
+        %   area del vastago (d = 80 mm medido), asi solo queda A_A y el offset c.
+        %   Se calcula con DOS juegos de escala de presion (hoja de datos y manometros)
+        %   porque la escala del sensor es la mayor incertidumbre; tambien con tres
+        %   parametros libres (A_A, A_B, c) y su numero de condicion: si P_A y P_B van
+        %   muy correlacionadas, el ajuste libre no separa A_A de A_B.
+            Ar = Prensa.A_A - Prensa.A_B;                           % [m2]
+            esc = struct('nombre', {'hoja de datos', 'manometros 30/50'}, ...
+                         'sA', {12.5, 11.07}, 'sB', {50, 54.52});    % [bar/V]
+            V0A = Prensa.P.pA_off;  V0B = Prensa.P.pB_off;
+            r = struct('nombre', {}, 'A_A_cm2', {}, 'D_mm', {}, 'c_kN', {}, 'rms_kN', {}, ...
+                       'A_A_libre_cm2', {}, 'A_B_libre_cm2', {}, 'cond', {});
+            fprintf('\n  AJUSTE DE A_A (vastago d = 80 mm: A_r = %.2f cm2) con %d escalones\n', Ar*1e4, height(T));
+            fprintf('  %-18s %9s %8s %9s %8s | %9s %9s %6s\n', 'escala de presion', 'A_A cm2', 'D mm', 'c kN', 'rms kN', 'A_A libre', 'A_B libre', 'cond');
+            for k = 1:numel(esc)
+                PA = (T.VA_V - V0A)*esc(k).sA;  PB = (T.VB_V - V0B)*esc(k).sB;
+                y = T.F_kN - 100*Ar*PB;
+                X = [100*(PA - PB), ones(height(T), 1)];
+                b = X\y;  AA = b(1);
+                X3 = [PA, -PB, ones(height(T), 1)];
+                b3 = X3\T.F_kN;
+                r(k) = struct('nombre', esc(k).nombre, 'A_A_cm2', AA*1e4, ...
+                    'D_mm', sqrt(4*AA/pi)*1e3, 'c_kN', b(2), 'rms_kN', sqrt(mean((y - X*b).^2)), ...
+                    'A_A_libre_cm2', b3(1)*100, 'A_B_libre_cm2', b3(2)*100, 'cond', cond(X3(:, 1:2)));
+                fprintf('  %-18s %9.1f %8.1f %9.2f %8.2f | %9.1f %9.1f %6.1f\n', r(k).nombre, ...
+                    r(k).A_A_cm2, r(k).D_mm, r(k).c_kN, r(k).rms_kN, r(k).A_A_libre_cm2, r(k).A_B_libre_cm2, r(k).cond);
+            end
+            fprintf('  referencia: D = 125 mm -> A_A 122.7 cm2 ; D = 160 mm -> A_A 201.1 cm2\n');
+        end
+
         function e = escala(v, c)
         %ESCALA  Voltios -> unidades de ingenieria (recta de dos puntos).
             e = c.e_lo + (v - c.v_lo)*(c.e_hi - c.e_lo)/(c.v_hi - c.v_lo);
@@ -198,16 +231,17 @@ classdef Prensa < handle
     %% ====================================================================
     methods
         function obj = Prensa()
-        %PRENSA  Localiza los modulos por MODELO, no por nombre (en NI MAX se
-        %   pueden renombrar: hoy son PrensaLEDI_AI/AO/DI/DO). Solo lectura.
+        %PRENSA  Localiza los modulos por NOMBRE de NI MAX (DeviceID): PrensaLEDI_AI/
+        %   AO/DI/DO. Si se renombran, hay que cambiar los cuatro 'PrensaLEDI_*' de abajo.
+        %   Solo lectura.
             dl = daqlist("ni");
             obj.Mods = struct('ai', '', 'ao', '', 'di', '', 'do', '');
             for k = 1:height(dl)
                 m = char(dl.Model(k));  id = char(dl.DeviceID(k));
-                if contains(m, '9222'), obj.Mods.ai = id;
-                elseif contains(m, '9263'), obj.Mods.ao = id;
-                elseif contains(m, '9421'), obj.Mods.di = id;
-                elseif contains(m, '9472'), obj.Mods.do = id; end
+                if contains(id, 'PrensaLEDI_AI'), obj.Mods.ai = id;
+                elseif contains(id, 'PrensaLEDI_AO'), obj.Mods.ao = id;
+                elseif contains(id, 'PrensaLEDI_DI'), obj.Mods.di = id;
+                elseif contains(id, 'PrensaLEDI_DO'), obj.Mods.do = id; end
             end
             falta = fieldnames(obj.Mods);  falta = falta(structfun(@isempty, obj.Mods));
             if any(ismember(falta, {'ai','ao'}))
@@ -707,6 +741,166 @@ classdef Prensa < handle
             signo = obj.descubreSentido(tao, tai);
             obj.recoloca(tao, tai, destino, signo, 'UMax', o.UMax, 'Tol', o.Tol, 'TMax', o.TMax);
             fprintf('\n  AO a 0 V.\n');
+        end
+
+        function res = escalonesFuerza(obj, o)
+        %ESCALONESFUERZA  Escalones de fuerza contra un tope rigido (viga de acero) para
+        %   fijar A_A (y con ella el diametro) con la celda como referencia.
+        %
+        %   p.conHpu(@() p.escalonesFuerza('Armar',true), 'Armar', true)
+        %
+        %   Fases: sale (extiende desde x bajo hasta XAprox) -> aprox (lento hasta el
+        %   contacto, F > 1.5 kN) -> carga (PI de fuerza con rampa; escalones de subida
+        %   y de bajada) -> descarga (retrae hasta F < 0.5 kN) -> separa. Cualquier
+        %   limite (F, P_A, P_B, ventana de posicion, F negativa, tiempo) lleva a la
+        %   descarga controlada. Al terminar deja el AO en U_NULL: PARAR LA UPH enseguida
+        %   (a 0 V el vastago se extiende ~8 mm/min y volveria a cargar la viga); conHpu
+        %   lo hace. Presiones en bar con la escala de params_prensa (PROVISIONAL) y
+        %   tambien en voltios, para reajustar la escala despues.
+            arguments, obj
+                o.Fobj (1,:) double = [5 10 20 30 40]   % [kN] escalones de subida
+                o.Baja (1,1) logical = true             % repite bajando
+                o.XAprox (1,1) double = 40              % [mm] hasta aqui se sube sin buscar contacto
+                o.XLento (1,1) double = 48              % [mm] desde aqui se aproxima despacio
+                o.XMaxContacto (1,1) double = 100       % [mm] sin contacto hasta aqui: aborta
+                o.Rampa (1,1) double = 1                % [kN/s]
+                o.Mantiene (1,1) double = 15            % [s] por escalon
+                o.Kp (1,1) double = 0.04                % [V/kN]
+                o.Ki (1,1) double = 0.03                % [V/(kN s)]
+                o.DuMax (1,1) double = 0.25             % [V] excursion maxima sobre U_NULL
+                o.PAmax (1,1) double = 60               % [bar]
+                o.PBmax (1,1) double = 75               % [bar] (en reposo P_B ~46 bar)
+                o.TMax (1,1) double = 900               % [s]
+                o.Etiqueta (1,1) string = "escalones"
+                o.Armar (1,1) logical = false
+            end
+            fprintf('%s\nESCALONES DE FUERZA contra tope rigido\n%s\n', repmat('=',1,74), repmat('=',1,74));
+            if any(o.Fobj <= 0) || max(o.Fobj) > 0.8*Prensa.F_MAX_SEG
+                error('Prensa:rango', 'Fobj debe estar en (0, %g] kN', 0.8*Prensa.F_MAX_SEG);
+            end
+            objetivos = o.Fobj;
+            if o.Baja, objetivos = [o.Fobj, fliplr(o.Fobj(1:end-1))]; end
+            Fabort = min(1.25*max(o.Fobj) + 3, Prensa.F_MAX_SEG);
+            fprintf('  escalones [kN]: %s\n  rampa %.1f kN/s, %.0f s por escalon, PI Kp=%.3f V/kN Ki=%.3f V/(kN s), |du|<=%.2f V\n', ...
+                mat2str(objetivos), o.Rampa, o.Mantiene, o.Kp, o.Ki, o.DuMax);
+            fprintf('  aborta si |F| > %.1f kN, P_A > %g, P_B > %g bar, x fuera de [%g, %g] mm (desde XAprox)\n', ...
+                Fabort, o.PAmax, o.PBmax, Prensa.X_MIN_SEG, Prensa.X_MAX_SEG);
+            fprintf('  contacto esperado a ~53-63 mm; aproximacion lenta desde %g mm, sin contacto a %g mm: aborta\n', o.XLento, o.XMaxContacto);
+            if ~o.Armar, fprintf('  ENSAYO EN SECO (falta ''Armar'').\n'); res = []; return, end
+            if isempty(obj.DO), error('Prensa:hpu', 'La UPH debe estar en marcha: usar conHpu.'); end
+
+            U0 = Prensa.U_NULL;
+            tao = obj.sesionAO();  tai = obj.abreAI(200);
+            write(tao, U0);  start(tai, "Continuous");
+            c = onCleanup(@() obj.finManiobra(tao, tai)); %#ok<NASGU>
+            e0 = obj.leeEstado(tai, 20);
+            fprintf('  inicio: x=%.2f mm  F=%.2f kN  P_A=%.1f  P_B=%.1f bar\n', e0.posicion, e0.fuerza, e0.presion_A, e0.presion_B);
+            if e0.posicion < 1 || e0.posicion > o.XAprox, error('Prensa:aborta', 'x inicial %.1f mm fuera de [1, %g]', e0.posicion, o.XAprox); end
+            if abs(e0.fuerza) > 2, error('Prensa:aborta', 'F inicial %.2f kN: debe ser ~0 antes de empezar', e0.fuerza); end
+
+            nombres = {'sale','aprox','carga','descarga','separa','fin'};
+            cA = Prensa.CANALES(3);  cB = Prensa.CANALES(4);
+            L = zeros(0, 10);                 % t fase x F Fsp PA PB u VA VB
+            pasos = zeros(0, 9);              % Fobj F PA PB VA VB x sube t
+            fase = 'sale';  abortado = '';  xIni = e0.posicion;  xc = NaN;
+            nCont = 0;  integ = 0;  Fsp = 0;  k = 1;  tHold = NaN;  tFase = 0;  tPrev = 0;  ult = -2;
+            xSep0 = e0.posicion;
+            T0 = tic;
+            while true
+                e = obj.leeEstado(tai, 4);
+                t = toc(T0);  dt = max(t - tPrev, 1e-3);  tPrev = t;
+                x = e.posicion;  F = e.fuerza;  PA = e.presion_A;  PB = e.presion_B;
+
+                % ---- vigilancia ------------------------------------------------
+                if ~ismember(fase, {'descarga','separa','fin'}) && isempty(abortado)
+                    if abs(F) > Fabort, abortado = sprintf('fuerza %.1f kN > %.1f', F, Fabort);
+                    elseif PA > o.PAmax, abortado = sprintf('presion A %.1f bar > %g', PA, o.PAmax);
+                    elseif PB > o.PBmax, abortado = sprintf('presion B %.1f bar > %g', PB, o.PBmax);
+                    elseif x > Prensa.X_MAX_SEG, abortado = sprintf('posicion %.1f mm > %g', x, Prensa.X_MAX_SEG);
+                    elseif ~strcmp(fase, 'sale') && x < Prensa.X_MIN_SEG, abortado = sprintf('posicion %.1f mm < %g', x, Prensa.X_MIN_SEG);
+                    elseif F < -3, abortado = sprintf('fuerza %.1f kN negativa (signo de celda o tiron)', F);
+                    elseif t > o.TMax, abortado = sprintf('tiempo > %g s', o.TMax);
+                    end
+                    if ~isempty(abortado)
+                        fprintf('\n  !! ABORTA: %s -> descarga controlada\n', abortado);
+                        fase = 'descarga';  tFase = t;
+                    end
+                end
+
+                % ---- fases -----------------------------------------------------
+                u = U0;
+                switch fase
+                    case 'sale'
+                        u = Prensa.uParaVel(0.6, 3);
+                        if t > 10 && (x - xIni) < 0.5
+                            abortado = 'el vastago no sube: sentido o sensor'; fase = 'fin';
+                        elseif x >= o.XAprox
+                            fase = 'aprox';  tFase = t;
+                            fprintf('\n  [aprox] x=%.1f mm: aproximacion al contacto\n', x);
+                        end
+                    case 'aprox'
+                        if x < o.XLento, v = 0.6; else, v = 0.15; end
+                        u = Prensa.uParaVel(v, 3);
+                        if F > 1.5, nCont = nCont + 1; else, nCont = 0; end
+                        if nCont >= 3
+                            xc = x;  fase = 'carga';  Fsp = F;  integ = 0;  tFase = t;
+                            fprintf('\n  [contacto] x=%.2f mm F=%.2f kN -> carga\n', x, F);
+                        elseif x > o.XMaxContacto
+                            abortado = sprintf('sin contacto hasta %g mm', o.XMaxContacto); fase = 'fin';
+                        end
+                    case 'carga'
+                        objF = objetivos(k);
+                        Fsp = Fsp + max(-o.Rampa*dt, min(o.Rampa*dt, objF - Fsp));
+                        err = Fsp - F;
+                        integ = max(-o.DuMax/o.Ki, min(o.DuMax/o.Ki, integ + err*dt));
+                        u = U0 + max(-o.DuMax, min(o.DuMax, o.Kp*err + o.Ki*integ));
+                        if isnan(tHold) && abs(objF - Fsp) < 1e-6, tHold = t; end
+                        if ~isnan(tHold) && t - tHold >= o.Mantiene
+                            w = L(:,2) == 3 & L(:,1) >= tHold + 0.4*o.Mantiene;
+                            m = mean(L(w, [4 6 7 9 10 3]), 1);
+                            pasos(end+1,:) = [objF, m, k <= numel(o.Fobj), t]; %#ok<AGROW>
+                            fprintf('\n  [paso %d/%d] Fobj %.0f kN: F=%.2f  P_A=%.2f  P_B=%.2f bar  x=%.2f mm\n', ...
+                                k, numel(objetivos), objF, m(1), m(2), m(3), m(6));
+                            k = k + 1;  tHold = NaN;
+                            if k > numel(objetivos), fase = 'descarga';  tFase = t; end
+                        end
+                    case 'descarga'
+                        u = U0 - 0.35;
+                        if F < 0.5 || t - tFase > 60, fase = 'separa';  tFase = t;  xSep0 = x; end
+                    case 'separa'
+                        % 15 mm de holgura: al parar la UPH el acumulador sigue cargado y con
+                        % AO = 0 V (+0.37 V sobre el null) empuja el vastago hacia la viga
+                        % (2026-11-04: 17 kN con solo 3 mm de separacion).
+                        u = U0 - 2;
+                        if x <= xSep0 - 15 || x <= Prensa.X_MIN_SEG + 1 || t - tFase > 40, fase = 'fin'; end
+                end
+                u = max(-3, min(3, u));
+                write(tao, u);
+
+                VA = cA.v_lo + (PA - cA.e_lo)*(cA.v_hi - cA.v_lo)/(cA.e_hi - cA.e_lo);
+                VB = cB.v_lo + (PB - cB.e_lo)*(cB.v_hi - cB.v_lo)/(cB.e_hi - cB.e_lo);
+                L(end+1,:) = [t, find(strcmp(fase, nombres), 1, 'first'), x, F, Fsp, PA, PB, u, VA, VB]; %#ok<AGROW>
+                if strcmp(fase, 'fin'), break, end
+                if t - ult >= 2
+                    ult = t;
+                    fprintf('\r  t=%5.0fs %-8s x=%6.2f mm F=%6.2f (sp %5.1f) kN  P_A=%5.1f P_B=%5.1f bar  u=%+.3f V ', ...
+                        t, fase, x, F, Fsp, PA, PB, u);
+                end
+            end
+            write(tao, U0);
+            fprintf('\n\n  fin: AO en %+.3f V (PARAR LA UPH ahora).  %s\n', U0, ternario(isempty(abortado), 'completo', ['ABORTADO: ' abortado]));
+
+            T = array2table(pasos, 'VariableNames', {'Fobj_kN','F_kN','PA_bar','PB_bar','VA_V','VB_V','x_mm','sube','t_s'});
+            Lt = array2table(L, 'VariableNames', {'t_s','fase','x_mm','F_kN','Fsp_kN','PA_bar','PB_bar','u_V','VA_V','VB_V'});
+            res = struct('pasos', T, 'registro', Lt, 'xContacto', xc, 'abortado', abortado);
+            try
+                writetable(T,  fullfile(Prensa.resultados(), o.Etiqueta + "_pasos.csv"));
+                writetable(Lt, fullfile(Prensa.resultados(), o.Etiqueta + "_registro.csv"));
+                fprintf('  guardado: results/%s_pasos.csv y _registro.csv\n', o.Etiqueta);
+            catch ME
+                fprintf('  (no se pudo guardar: %s)\n', ME.message);
+            end
+            if height(T) >= 3, res.ajuste = Prensa.ajustaDiametro(T); end
         end
     end
 

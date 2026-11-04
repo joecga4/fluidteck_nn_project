@@ -18,7 +18,7 @@
                    3 limite de posicion    4 paro de emergencia
                    5 limite del sistema (Fcorte 160 / 170 kN)
                    6 sin lectura de fuerza del QuantumX (desactivada desde v14)
-                   7 limite por presiones (pB >= PBmax o Fp >= Fcorte)
+                   7 limite por presiones (pa >= PAmax o Fp >= Fcorte)
    MODOS    modo:  0 control de desplazamiento (mm)   1 control de fuerza (kN)
    PARO:    salida 0 V, controlador en seguimiento (sin salto al soltarlo),
             alarma visible en todo estado y la UPH se apaga (logica en el
@@ -30,7 +30,11 @@
                 modo    ver arriba
                 t       tiempo del ensayo [s]
                 tr      reloj de alta resolucion [s]   (para medir dt)
-                pa, pb  presiones del panel [bar] (pa camara con vastago, pb sin vastago)
+                pa      presion de la camara A, SIN vastago [bar]  (TR44.2 0-100 bar, ai2)
+                pb      presion de la camara B, CON vastago [bar]  (TR49.2 0-400 bar, ai3)
+                        Llegan en bar reales: en el diagrama, antes del nodo,
+                        pa = (V_ai2 - 1.9826)*12.5   y   pb = (V_ai3 - 1.9682)*50.
+                        Convencion unica en todo el codigo: A = sin vastago, B = con vastago.
                 tkq,tqx sin uso desde v14 (vigilancia del QuantumX desactivada)
                 vjog    velocidad de aproximacion fuera de ensayo [mm/min]
                 Flib    limite de fuerza fuera de ensayo [kN]
@@ -62,11 +66,22 @@
      6 F1   7 x1   8 x0   9 up  10 mp  11 cau
 
    HISTORIAL (mas reciente primero)
-     v15 rev. 2026-11-02: presiones con la calibracion de CLAUDE.md 2.4 (pbc 32.293
-          bar/V, pac 18.163 bar/V) y Fp con el cilindro 125/80 mm (A_A 122.72 cm2,
-          A_B 72.45 cm2). Antes: escalas de la hoja de datos y cilindro 160x80, con
-          lo que pbc leia ~2.7 veces menos presion que el manometro y el corte por
-          presiones no actuaba a tiempo.
+     v15 rev. 2026-11-04: convencion unica A = camara SIN vastago (pa, ai2, TR44.2) y
+          B = camara CON vastago (pb, ai3, TR49.2) en todo el codigo. Cableado definitivo
+          y cilindro medido 160/80 mm (A_A 201.06 cm2, A_B 150.80 cm2). pa y pb llegan
+          en bar reales (escalados en el diagrama con los ceros medidos y la hoja de
+          datos): se eliminan el reescalado y la calibracion de agosto (obsoleta, hecha
+          con los cables invertidos). Fp = 2.0106*pa - 1.5080*pb. PBmax pasa a PAmax
+          (camara A). Lg[12] = pa, Lg[13] = pb, Lg[14] = Fp (antes Lg[12] era la camara
+          con vastago). El corte por presiones sigue DESACTIVADO (protPres = 0).
+     v15 rev. 2026-11-03: corte por presiones (causa 7) DESACTIVADO temporalmente
+          (protPres = 0): el ensayo se detenia en ~5 kN. La unica proteccion es la
+          celda (Fcorte = 160 kN). Las presiones se siguen registrando.
+     v15 rev. 2026-11-02: presiones con la calibracion de CLAUDE.md 2.4 (camara sin
+          vastago 32.293 bar/V, camara con vastago 18.163 bar/V; OBSOLETA el 2026-11-04)
+          y Fp con el cilindro 125/80 mm (descartado el 2026-11-04). Antes: escalas de
+          la hoja de datos y cilindro 160x80, con lo que la camara sin vastago leia
+          ~2.7 veces menos presion que el manometro y el corte no actuaba a tiempo.
      v15: reserva automatica del cDAQ al iniciar (30 reintentos cada 2 s) y
           proteccion ante NaN al final del codigo.
      v14: la fuerza de control vuelve a ser la celda via modulo Krenel en el cDAQ
@@ -75,12 +90,11 @@
      v13: F venia de la celda en el QuantumX (canal 1) via global F_QX; tqx = Tick
           Count de la ultima muestra. Sin dato nuevo en 0.3 s: salida 0 V y, en
           ensayo, FALLA causa 6.
-     v13: chequeo independiente por presiones (pb camara sin vastago TR44.2
-          0-100 bar, pa camara con vastago TR49.2 0-400 bar, ambos 4-20 mA). Las
-          presiones del panel se reescalan a la hoja de datos: pac=pa*0.915,
-          pbc=pb*1.0618. Fp = 2.0106*pbc - 1.5276*pac (kN, cilindro 160x80).
-          Limite: pbc >= PBmax (95 bar, el TR44 satura en 100 bar) o Fp >= Fcorte:
-          no se permite avanzar y en ensayo FALLA causa 7.
+     v13: chequeo independiente por presiones (camara A sin vastago TR44.2 0-100 bar,
+          camara B con vastago TR49.2 0-400 bar, ambos 4-20 mA; con otros nombres
+          de variable). Se reescalaban a la hoja de datos. Fp = 2.0106*pA - 1.5276*pB
+          (kN, cilindro 160x80). Limite: pA >= 95 bar (el TR44 satura en 100 bar) o
+          Fp >= Fcorte: no se permite avanzar y en ensayo FALLA causa 7.
      v13: fuera de ensayo el retroceso nunca se bloquea por la proteccion de fuerza.
      v12: en control de fuerza, fuera de ensayo carga y descarga a vdes = 15
           kN/min; en ensayo la carga usa la Rampa del panel y la descarga va a vdes.
@@ -108,20 +122,19 @@ float64 d, dsp0, dsp, dFm, knew, xsa, xpr, pm, iniE, vj, Fl;
 /* lazo interno */
 float64 ex, ui, dt;
 /* chequeo por presiones */
-float64 pac, pbc, Fp, plim;
+float64 Fp, plim, protPres;
 /* vigilancia del QuantumX (desactivada) y validez de la lectura */
 float64 qxok, okm;
 /* arreglos de salida */
 float64 So[12];
 float64 Lg[15];
 /* constantes */
-float64 Fcorte, vdes, PBmax, kmin, kmax, umax, xwin, vlenta, alfaK;
-float64 escPA, escPB, V0DS, sDsA, sDsB, V0A, kA, V0B, kB, cFpB, cFpA;
-float64 vA, vB;
+float64 Fcorte, vdes, PAmax, kmin, kmax, umax, xwin, vlenta, alfaK;
+float64 cFpA, cFpB;
 
 Fcorte = 160;      /* kN: umbral de corte (el limite del sistema hidraulico es 170, margen 10) */
 vdes   = 15;       /* kN/min: carga/descarga en fuerza fuera de ensayo y descarga en ensayo */
-PBmax  = 95;       /* bar: corte por presion de la camara sin vastago (limitadora a 100 bar) */
+PAmax  = 95;       /* bar: corte por presion de la camara A, sin vastago (TR44.2 satura a 100; limitadora a 100) */
 kmin   = 0.02;     /* kN/mm: rigidez estimada minima */
 kmax   = 50;       /* kN/mm: rigidez estimada maxima */
 umax   = 10;       /* V: saturacion del comando (tambien umbral del anti-windup) */
@@ -129,26 +142,16 @@ xwin   = 2;        /* mm: xsp no se separa de x mas que esto */
 vlenta = 2;        /* mm/min: avance lento fuera de ensayo con compresion */
 alfaK  = 0.3;      /* filtro de la rigidez estimada */
 
-/* Presiones: pa y pb llegan del panel y se convierten en dos pasos.
-   (1) Panel -> tension equivalente del canal. v13 reescala el panel a la hoja de datos
-       (escPA, escPB): 50 bar/V la camara con vastago (pa, ai3) y 12.5 bar/V la camara
-       sin vastago (pb, ai2), cero en 2 V (4-20 mA sobre 500 ohm).
-   (2) Tension -> bar con la CALIBRACION por dos puntos contra manometros
-       (CLAUDE.md 2.4, 2026-08-12), no con la hoja de datos. */
-escPA  = 0.915;    /* reescalado de pa a la hoja de datos */
-escPB  = 1.0618;   /* reescalado de pb a la hoja de datos */
-V0DS   = 2;        /* V: cero de la hoja de datos (4 mA) */
-sDsB   = 50;       /* bar/V de la hoja de datos, camara con vastago (pa) */
-sDsA   = 12.5;     /* bar/V de la hoja de datos, camara sin vastago (pb) */
-V0B    = 1.9801;   /* V: cero calibrado de ai3, camara B (con vastago) */
-kB     = 18.163;   /* bar/V calibrado de ai3 */
-V0A    = 1.9697;   /* V: cero calibrado de ai2, camara A (sin vastago) */
-kA     = 32.293;   /* bar/V calibrado de ai2 */
+/* Presiones: pa (camara A, SIN vastago) y pb (camara B, CON vastago) llegan en bar reales.
+   El escalado se hace en el diagrama, antes del nodo, con los ceros medidos (2026-11-04) y
+   la hoja de datos de cada sensor (4-20 mA sobre 500 ohm = 2-10 V):
+       pa = (V_ai2 - 1.9826) * 12.5     TR44.2, 0-100 bar
+       pb = (V_ai3 - 1.9682) * 50       TR49.2, 0-400 bar */
 
-/* Fp = A_A*P_A - A_B*P_B, con el cilindro 125/80 mm (CLAUDE.md 2.3, PROVISIONAL hasta
-   confirmar el diametro interior): A_A = 122.72 cm2, A_B = 72.45 cm2 (kN/bar = A[m2]*100) */
-cFpB   = 1.22718;  /* kN/bar de pbc: area de la camara sin vastago */
-cFpA   = 0.72453;  /* kN/bar de pac: area anular, camara con vastago */
+/* Fp = A_A*pa - A_B*pb con el cilindro 160/80 mm (CLAUDE.md 2.3, medido 2026-11-04):
+   A_A = 201.06 cm2, A_B = 150.80 cm2 (kN/bar = A[m2]*100) */
+cFpA   = 2.0106;   /* kN/bar de pa: area de la camara A, sin vastago */
+cFpB   = 1.5080;   /* kN/bar de pb: area anular de la camara B, con vastago */
 
 if (sizeOfDim(P,0)>=8) {
     Kx=P[0]; Tix=P[1]; Kf=P[2]; k0=P[3]; caida=P[4]; sobre=P[5]; vret=P[6]; dumax=P[7];
@@ -186,14 +189,14 @@ st = stp;  f0 = f0p;  ts = tsp;
    2. MAGNITUDES DERIVADAS Y LIMITES
    --------------------------------------------------------------------------- */
 
-/* chequeo independiente por presiones */
-vB = V0DS + pa*escPA/sDsB;     /* tension equivalente de ai3 (camara B, con vastago) */
-vA = V0DS + pb*escPB/sDsA;     /* tension equivalente de ai2 (camara A, sin vastago) */
-pac = (vB - V0B)*kB;           /* presion real, camara con vastago [bar] */
-pbc = (vA - V0A)*kA;           /* presion real, camara sin vastago [bar] */
-Fp = cFpB*pbc - cFpA*pac;      /* fuerza estimada por presiones [kN] */
+/* chequeo independiente por presiones (pa, pb ya en bar reales) */
+Fp = cFpA*pa - cFpB*pb;        /* fuerza estimada por presiones [kN] */
 plim = 0;
-if (pbc>=PBmax || Fp>=Fcorte) plim = 1;
+/* TEMPORAL (2026-11-03): corte por presiones DESACTIVADO; la unica proteccion es la
+   celda (Fcorte). pa, pb y Fp se siguen registrando en Lg[12..14].
+   Para reactivarlo: protPres = 1. */
+protPres = 0;
+if (protPres>0.5 && (pa>=PAmax || Fp>=Fcorte)) plim = 1;
 
 /* v14: F viene del Krenel (cDAQ); sin vigilancia del QuantumX */
 qxok = 1;
@@ -415,7 +418,7 @@ kho = kh;
 
 Lg[0]=t;    Lg[1]=st;   Lg[2]=sp;   Lg[3]=F;   Lg[4]=x;   Lg[5]=xsp;
 Lg[6]=u;    Lg[7]=kh;   Lg[8]=dt;   Lg[9]=falla; Lg[10]=causa; Lg[11]=prot;
-Lg[12]=pac; Lg[13]=pbc; Lg[14]=Fp;
+Lg[12]=pa;  Lg[13]=pb;  Lg[14]=Fp;
 
 
 /* ---------------------------------------------------------------------------

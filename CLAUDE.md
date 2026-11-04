@@ -48,36 +48,47 @@ guardamotores (6–10 A, ajustados a ~6.2 A) solo cuadran con 220 V.
 (≈ 0.20 V de comando: **el null deriva con la temperatura del aceite**).
 Mando: NI 9263 ±10 V → convertidor Delta VC2124 → **±40 mA** (`K_amp = 0.004 A/V`).
 
-### 2.3 Actuador — ⚠ geometría en revisión
-| | Memoria | Medido / provisional |
+### 2.3 Actuador — diámetro medido por ensayo de fuerza (2026-11-04)
+| | Memoria | Medido |
 |---|---|---|
-| Émbolo D | 160 mm | **125 mm (provisional, inferido)**; tubo exterior **190 mm (medido)** |
+| Émbolo D | 160 mm | **160 mm: ajuste 161.5 mm (±3 mm), compatible con 160** (ensayo contra la celda); tubo exterior **190 mm (medido)** |
 | Vástago d | 100 mm | **80 mm (medido 2026-10-31)** |
-| A_A / A_B | 201.1 / 122.5 cm² | **122.7 / 72.5 cm²** |
+| A_A / A_B | 201.1 / 122.5 cm² | **201.1 / 150.8 cm²** |
 | Carrera | — | **física 300 mm**; útil 0–150 mm (límite de la VI y del Temposonic) |
 | Montaje | vertical, vástago hacia abajo; masa móvil 150 kg + celda 28 kg | |
 
-**Por qué 125 mm (inferido, no medido).** El vástago de 80 mm es medido, así que el 160/100
-de la memoria queda descartado. Tres evidencias independientes apuntan a D ≈ 125–128 mm:
-1. Relación de presiones en equilibrio P_B/P_A = A_A/A_B = 50/30 = 1.667 (1.64–1.70 en la
-   prueba de saturación) → con d = 80 mm, D = 124.7–128.1 mm. Con 150 o 160 mm la relación
-   sería 1.40 o 1.33.
-2. Bomba de 1.7 L/min (placa) y 2.64 mm/s sostenidos al extender → A ≈ 107–123 cm².
-3. El tubo de 190 mm de exterior deja 32.5 mm de pared con D = 125 mm: gruesa para 100 bar
-   pero no contradictoria (≈ 38 MPa de tensión en el interior a 150 bar), y coherente con
-   un cilindro pensado para la clase de 200 kN, que con 125 mm exige ~163 bar. Con 160 mm
-   serían 15 mm, más habitual: este dato por sí solo no decide.
+**Cómo se determinó D (2026-11-04).** Serie de escalones de fuerza 5–10–20–30–40–30–20–10–5 kN
+contra una viga de acero con `Prensa.escalonesFuerza` (control PI de fuerza, UPH en marcha,
+catman Easy como segunda referencia), registrando celda, Temposonic y los dos transductores
+de presión alineados. Modelo estático `F = A_A·(P_A − P_B) + A_r·P_B + c` con `A_r = A_A − A_B =
+50.27 cm²` (vástago de 80 mm medido) y las escalas de hoja de datos (A: 12.5 bar/V, TR44.2 0–100
+bar; B: 50 bar/V, TR49.2 0–400 bar; ceros 1.9826 / 1.9682 V):
+- **D = 161.5 mm, offset c = −0.03 kN, rms 0.25 kN** con los 9 escalones (subida 160.8 mm,
+  bajada 163.1 mm; la histéresis de fricción es de ~0.3 kN). La fuerza hidráulica con
+  160/80 mm coincide con la celda a ≤ 0.8 kN en todo el rango (p. ej. 40 kN: celda 39.6,
+  hidráulica 39.3).
+- **El offset valida las escalas:** con las escalas de agosto/manómetros c sale +15 kN; a lo largo
+  del valle c ≈ 0 la incertidumbre de escala (±8 %) movería D entre 156 y 168 mm.
+- A 40 kN las presiones son solo P_A ≈ 46 y P_B ≈ 35 bar. Rigidez del apoyo ~14 kN/mm
+  (celda frente a Temposonic).
+- Tres indicios independientes coinciden: ventana de calibración (P_B/P_A = 1.35), equilibrio
+  del émbolo libre (P_B/P_A = 1.38 → D ≈ 153–165 mm) y esta serie. **Los 125 mm que se habían
+  inferido quedan descartados** (partían de presiones medidas con los cables invertidos).
 
-**Pendiente: confirmar D** (placa del cilindro o prueba de fuerza contra la celda:
-F_celda / P_A = A_A → ~37 kN a 30 bar si es 125 mm, ~60 kN si es 160 mm; prueba prevista
-el 2026-11-03). Fuerza hidráulica: `F = P_A·A_A − P_B·A_B` (cilindro asimétrico).
+**Pendiente:** repetir la serie con la UPH a otra temperatura y, si se puede, con otra
+viga/posición; confirmar con la placa del cilindro; actualizar `params_prensa.m`, `PID.c` y
+`tools/planta.py` (aún con 125/80 o 160/100) y **revalidar el modelo Simulink**, cuyos
+parámetros (kQ, x0, xu, Ps, volúmenes) se ajustaron con 125 mm. Fuerza hidráulica:
+`F = P_A·A_A − P_B·A_B` (cilindro asimétrico).
 
 **Episodio de sobrecarga (informado por el laboratorio, 2026-11-02).** El equipo llegó
 alguna vez a ~170–180 kN, empezó a saturar y **falló una soldadura del manifold**. Con
-125 mm eso son 139–147 bar (1.4–1.5× los 100 bar de trabajo, cerca de los 150 bar de la
-bomba); con 160 mm habrían bastado 85–90 bar, cosa que la geometría descarta. Consecuencias:
-a 100 bar la fuerza máxima es **123 kN**; el límite de 170 kN de `PID.c` (v11) viene de ese
-episodio y **no es un margen seguro**. Fecha, presiones registradas y tarado real de la
+160/80 mm eso son ~85–90 bar de P_A (con P_B baja): **dentro de la presión de trabajo de 100
+bar**, y a 100 bar la fuerza máxima es **~201 kN** (cilindro de clase 200 kN, coherente con la
+celda de 200 kN). Que la soldadura fallara a 85–90 bar sugiere que el manifold no está
+dimensionado para la presión de trabajo, o que hubo picos (cierre brusco, limitadora, golpe
+al tope) por encima de lo que registra la VI. El límite de 170 kN de `PID.c` (v11) viene de
+ese episodio y **no es un margen seguro**. Fecha, presiones registradas y tarado real de la
 limitadora: desconocidos (§5).
 
 ### 2.4 Instrumentación y E/S (cDAQ-9184, alias `cDAQ9184-1ADC24C`)
@@ -85,12 +96,48 @@ limitadora: desconocidos (§5).
 |---|---|---|
 | `ai0` (NI 9222) | posición, Temposonic | 0–10 V → 0–150 mm (15 mm/V) |
 | `ai1` | celda de carga (convertidor multirango) | 0–10 V → 0–200 kN (20 kN/V) |
-| `ai2` | presión cámara A | 4–20 mA / 500 Ω: **32.293 bar/V**, cero 1.9697 V |
-| `ai3` | presión cámara B | **18.163 bar/V**, cero 1.9801 V |
+| `ai2` | presión cámara A (sin vástago), **FOX TR44.2 0–100 bar** | 4–20 mA / 500 Ω; hoja de datos 12.5 bar/V, cero 2 V. *Escala de agosto (32.293 bar/V, cero 1.9697 V) obsoleta: ver abajo* |
+| `ai3` | presión cámara B (con vástago), **FOX TR49.2 0–400 bar** | hoja de datos 50 bar/V, cero 2 V. *Escala de agosto (18.163 bar/V, cero 1.9801 V) obsoleta* |
 | `ao0` (NI 9263) | comando servoválvula | ±10 V → ±40 mA |
 
-Escalas de presión calibradas por dos puntos contra manómetros (2026-08-12). Los fondos
-que resultan (259 / 146 bar) no coinciden con la placa reportada (100 / 400 bar): pendiente.
+**Asignación DEFINITIVA de presiones (fijada por el laboratorio el 2026-11-04):**
+**cámara A (sin vástago) = FOX TR44.2, 0–100 bar, 4–20 mA a 2 hilos → `ai2`; cámara B
+(con vástago) = FOX TR49.2, 0–400 bar, 4–20 mA a 2 hilos → `ai3`.** (El laboratorio había
+leído «TR45.2 0–200 bar» por error el 2026-11-04 y lo corrigió el mismo día tras la
+calibración: la etiqueta es TR49.2 0–400 bar, como se reportó en origen.) Esta posición no
+se vuelve a cambiar.
+
+⚠ **Antes del 2026-11-04 los cables estaban INVERTIDOS** (el sensor de A entraba por `ai3` y
+el de B por `ai2`), mientras que el software y la calibración de agosto asumían `ai2` = A y
+`ai3` = B. Consecuencias: (1) las escalas de agosto (32.293 / 18.163 bar/V, cero 1.9697 /
+1.9801 V) se obtuvieron asignando los manómetros 30/50 bar al canal equivocado y **no
+valen**; (2) toda captura anterior con columnas `presion_A`/`presion_B` (CSV de agosto,
+datos NARX, log `Lg[12..14]` de la VI, informe de 2017) tiene las presiones permutadas y
+con escala errónea; solo posición, celda y comando no se ven afectados; (3) el cierre del
+equilibrio «P_B/P_A = A_A/A_B» de agosto no prueba nada sobre D. Hasta recalibrar, usar la
+hoja de datos (A 12.5 y B 50 bar/V, cero 2 V) y verificar contra los manómetros.
+
+**2026-11-04, UPH apagada, cables reconectados con la asignación definitiva:** ceros
+medidos (5 s a 1 kHz, sin deriva en 30 s, σ ≈ 6 mV): **`ai2` (A, TR44.2) = 1.9826 V,
+`ai3` (B, TR49.2) = 1.9682 V**. Los ceros de agosto (1.9697 / 1.9801 V) coinciden con
+estos con los canales intercambiados: el offset de 4 mA es del sensor y viajó con él, lo
+que confirma la inversión de cableado. `params_prensa.m` lleva ahora estos ceros y las
+escalas de hoja de datos (12.5 / 50 bar/V) como **PROVISIONALES** hasta fijar la escala
+con la celda (§5).
+
+**Punto de calibración 2026-11-04 (primera vez que `Prensa.m` escribe AO/DO en hardware: sin
+incidentes).** UPH en marcha 3 min, AO en U_NULL = −0.3697 V, vástago ~68 mm, ventana de
+30 s estable: **V_A = 4.6925 ± 0.0029 V, V_B = 2.8853 ± 0.0012 V** (ΔV sobre el cero:
+2.710 V y 0.917 V). Manómetros (asignados por la tubería, leídos a ojo): **A = 30 bar,
+B ≈ 50 bar**. Escalas implícitas: **A 11.07 bar/V** (hoja de datos 12.5: el sensor marca
++13 % sobre el manómetro) y **B 54.5 bar/V** (hoja de datos del TR49.2 0–400 bar: 50
+bar/V, el sensor marca 8 % por debajo del manómetro). Con la hoja de datos: P_A = 33.9 bar
+y P_B = 45.9 bar, relación 1.35. La UPH vuelve a parar con DI7 = 0.
+
+⚠ **Los manómetros no deciden D.** Equilibrio estático A_A/A_B = P_B/P_A: con los
+manómetros (50/30 = 1.67) sale D ≈ 126 mm, pero ±1.5 bar de lectura lo mueven entre 120 y
+135 mm; con los sensores (1.35) sale D ≈ 157 mm, cerca de los 160 mm de la memoria. Hace
+falta la prueba de fuerza contra la celda (§2.3, §5).
 
 **Digitales — confirmadas por etiquetas de cableado, memoria y VI (2026-10-31).**
 Cada `DOn` del NI 9472 activa el relé `K(n+1)` (Phoenix 2961192, 24 VDC).
@@ -129,20 +176,23 @@ dinámico con bomba + limitadora + acumulador (4.2.4), fricción de Stribeck (4.
 topes y sensores con escala, ruido, ADC y latencia.
 
 - `params_prensa.m`: todos los parámetros, cada uno con su origen (MEDIDO / PLACA /
-  CATÁLOGO / AJUSTADO / SUPUESTO). Vigente: **125/80 mm, Qp 1.7 L/min, kQ 0.505,
-  x0 1.98 %, xu 1.11 %, L_fis 0.300 m, Ps_ini**.
+  CATÁLOGO / AJUSTADO / SUPUESTO). **Actualizado el 2026-11-04 a la geometría medida:
+  160/80 mm (§2.3), Qp 3.18 L/min, kQ 0.9235, x0 3.22 %, xu 0 (zero-lap)**, L_fis 0.300 m,
+  presiones iniciales 34.7/46.9 bar, escalas de presión de hoja de datos (§2.4).
 - `prensa_fluidtek.slx`: generado por `construir_modelo_prensa.m`; validación con
   `validar_modelo_prensa.m` y `sim_satura.m` (estos scripts y los resultados están fuera
   del repositorio, en el respaldo de `D:\fluidteck_project`).
 
-**Validación (2026-10-31):** curva comando→velocidad RMS **0.039 mm/s** (08-12) y
-**0.108 mm/s** (08-21); presiones en reposo modelo 28/49 bar vs manómetros 30/50; prueba
-de saturación ±10 V: error de posición 2.4 / 1.9 mm en ~98 mm.
-
-**Prueba de saturación (2026-10-31, `daq.py --satura`):** a ±10 V la presión de
-suministro cae a ~47 bar; extendiendo la velocidad decae de 4.0 a 2.64 mm/s (se vacía el
-acumulador), retrayendo sube de 2.53 a 2.73 mm/s. Los 3.92 mm/s de la curva del 08-21
-los aportaba el acumulador; la bomba es la de la placa.
+**Validación con los parámetros de 2026-11-04** (`Prensa.simula`, sin sobrescrituras):
+curva comando→velocidad (ley medida de §4) RMS **0.0138 mm/s** (antes 0.042 con 125/80);
+a comando 0 V el vástago se extiende a +0.138 mm/s (medido +0.14) y en el null a −0.017;
+presiones en reposo a U_NULL **36.0 / 49.6 bar** (medido 34.7 / 46.9; antes 38.7 / 69.1);
+saturación a +10 V: la velocidad decae de **4.07 a 2.64 mm/s** (medido 4.0 → 2.64), lo que
+exige 3.18 L/min con A_A = 201 cm²: otra confirmación de D = 160 mm.
+**Pendiente:** retrayendo a −10 V el modelo da 3.5 mm/s y se midió 2.5–2.7; la presión de
+suministro «~47 bar» de la prueba de 2026-10-31 viene de los sensores con cables invertidos
+y no vale: repetir la prueba de saturación (`Prensa.satura`) con el cableado definitivo.
+Antes de este cambio el modelo se había validado con 125/80 (RMS 0.039 / 0.108 mm/s).
 
 ---
 
@@ -172,14 +222,14 @@ los aportaba el acumulador; la bomba es la de la placa.
 | VI v15 (reserva automática del cDAQ, protección NaN) | en uso; falta prueba tras reinicio completo con UPH encendida |
 | Licencia driver HBM LabVIEW (QuantumX MX840B) | vencía ~2026-11-05; cotización pedida a HBK el 2026-10-28; si vence, registrar en catman (el control por cDAQ no depende de ella) |
 | Diagrama eléctrico CADe_SIMU | hecho y simulado con las E/S reales (§2.4) |
-| Modelo Simulink | validado con 125/80 provisional |
-| Diámetro interior del cilindro | **pendiente** — define áreas, fuerza y caudal; prueba F_celda / P_A prevista el 2026-11-03 |
+| Modelo Simulink | **actualizado y revalidado el 2026-11-04 con 160/80** (§3): RMS 0.0138 mm/s, saturación +10 V reproducida. Falta repetir la prueba de saturación con el cableado definitivo (retracción −10 V: modelo 3.5 vs medido 2.5–2.7 mm/s) y revisar Ps, volúmenes y acumulador |
+| Diámetro interior del cilindro | **medido 160 mm** (ajuste 161.5 ± 3 mm, 2026-11-04, §2.3); falta repetir a otra temperatura/posición y confirmar con la placa |
 | Episodio de 170–180 kN (soldadura del manifold) | recuperar fecha y presiones (`fuerzavscarga18.xls` de 2017, en el respaldo) y verificar el estado y la presión de diseño del manifold antes de presurizar cerca de 100 bar |
-| `PID.c` (Formula Node de la v15) | reescrito para legibilidad (equivalente al original, verificado con un traductor C→Python), con presiones calibradas (§2.4) y `Fp` con 125/80. **Falta pegarlo en la VI** (detenida, UPH apagada) y comprobar con la UPH en marcha que `Lg[12]`/`Lg[13]` marcan ≈ 50/30 bar a −0.37 V. Decisión pendiente: bajar `Fcorte` (160 kN; ~110–115 kN a 100 bar) y añadir corte por presión de la cámara B |
+| `PID.c` (Formula Node de la v15) | **Actualizado el 2026-11-04** (verificado con 320 000 pasos de prueba diferencial: el controlador es idéntico al anterior; solo cambia la lógica de presiones): convención única **`pa` = cámara A sin vástago (`ai2`), `pb` = cámara B con vástago (`ai3`)**, llegan **en bar reales** (se escalan en el diagrama, antes del nodo: `pa = (V_ai2 − 1.9826)·12.5`, `pb = (V_ai3 − 1.9682)·50`); `Fp = 2.0106·pa − 1.5080·pb` (160/80 mm); `PAmax` = 95 bar; `Lg[12..14]` = pa, pb, Fp. **Falta:** cablear los dos escalados en el diagrama de la VI, conectar `ai2`→`pa` y `ai3`→`pb`, y pegar el texto en el Formula Node (VI detenida, UPH apagada). El corte por presión sigue **desactivado** (`protPres = 0`); reactivarlo tras comprobar con la UPH en marcha que `Lg[12]`/`Lg[13]` marcan ≈ 34/47 bar a −0.37 V y `Lg[14]` ≈ celda. Decisión pendiente: `Fcorte` 160 kN ≈ 80 bar y 200 kN ≈ 100 bar: **160 kN ya está en la zona del episodio de la soldadura (§2.3)**, bajarlo |
 | Manómetro de la UPH | leer en reposo (tarado real de la limitadora) y durante un recorrido a ±10 V; el modelo da Ps ≈ 100 bar al retraer y la medida ~47 bar |
 | Acumulador | buscar placa (volumen, precarga) |
-| Escalas de presión | revisar placa de los transductores |
-| `tools/planta.py` (fuera del repo) | sigue con 160/100: actualizar cuando se confirme D |
+| Escalas de presión | **bloquea la prueba del diámetro.** Resuelto el 2026-11-04: cableado definitivo (A→`ai2`, B→`ai3`, §2.4) y escalas de hoja de datos con ceros medidos, validadas por la serie de fuerza (offset 0 kN). Ya aplicadas en `params_prensa.m`, `Prensa.m` y `PID.c`; falta aplicarlas en el diagrama de la VI y revisar el log y los archivos de agosto |
+| `tools/planta.py` (fuera del repo) | sigue con 160/100: actualizar a 160/80 (D ya confirmado, §2.3) |
 | Fricción de Stribeck, volúmenes muertos | supuestos: identificar con rampas lentas a velocidad constante |
 | Seta de emergencia | verificar si corta KM1 sin la VI (§2.4) |
 | Neurocontrolador (BPTT) y comparación con el PID | sin empezar |
@@ -192,10 +242,16 @@ los aportaba el acumulador; la bomba es la de la placa.
 
 Cilindro de hasta 200 kN, planta casi sin amortiguamiento (δ_h ≈ 1e-3).
 - Alguien junto a la seta en toda maniobra; sin probeta para identificación.
-- **No presurizar por encima de la presión de trabajo** (100 bar ≈ 123 kN con 125 mm): el
-  equipo ya llegó a 170–180 kN y falló una soldadura del manifold (§2.3). El corte de
-  160 kN de `PID.c` no es margen seguro mientras no se rebaje.
+- **No presurizar por encima de la presión de trabajo** (100 bar ≈ **201 kN** con 160/80 mm,
+  medido 2026-11-04): el equipo ya llegó a 170–180 kN (≈ 85–90 bar) y falló una soldadura del
+  manifold (§2.3), es decir, **a una presión por debajo de los 100 bar de trabajo**. Hasta
+  verificar el manifold, no pasar de ~40–50 kN en ensayos de identificación; el corte de
+  160 kN (≈ 80 bar) de `PID.c` no es margen seguro: bajarlo.
 - AO a 0 V **antes** de energizar la bomba (el NI 9263 conserva la última tensión).
+- **Al parar la UPH, separar el vástago ≥ 15 mm de cualquier probeta o tope** (y no dejar
+  el AO en 0 V mientras haya presión): 0 V está +0.37 V sobre el null, y con el acumulador
+  aún cargado el vástago se extiende y empujó una viga hasta **~17 kN** (2026-11-04, con
+  solo 3 mm de separación), sin que nadie lo gobernara.
 - Límites por software: ventana de trabajo 20–130 mm (recolocación 4–146 mm),
   fuerza 50 kN, PA 110 bar, PB 130 bar.
 - LabVIEW y NI MAX reservan los módulos: cerrarlos antes de usar Python (y viceversa).

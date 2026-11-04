@@ -27,12 +27,12 @@ function P = params_prensa(varargin)
 P = struct();
 
 %% 1. Geometria del actuador (MEMORIA + laboratorio)
-P.D      = 0.125;     % [m] diametro del embolo                         PROVISIONAL (2026-10-31)
-%   125/80 mm es la geometria que cierra a la vez: vastago medido (80 mm), placa
-%   de la UPH (1.7 L/min) y el balance de fuerzas de results/saturacion.csv
-%   (PB/PA = 1.64-1.70 en ambos sentidos). La memoria dice 160/100 y el tubo mide
-%   ~190 mm por fuera: VERIFICAR el diametro interior (placa del cilindro o prueba
-%   de fuerza contra la celda: F_celda/PA = A_A).
+P.D      = 0.160;     % [m] diametro del embolo                         MEDIDO 2026-11-04
+%   Ensayo de fuerza contra una viga de acero (Prensa.escalonesFuerza, 9 escalones
+%   5-40 kN, celda + Temposonic): ajuste D = 161.5 mm (+-3), offset 0 kN, rms 0.25 kN, con
+%   d = 80 mm y las escalas de hoja de datos de los transductores. Coincide con la
+%   memoria (160 mm). Los 125 mm de 2026-10-31 se habian inferido de presiones medidas
+%   con los cables de A y B invertidos: DESCARTADOS (CLAUDE.md sec. 2.3).
 P.d      = 0.080;     % [m] diametro del vastago (79.9-80.0 mm, 2026-10-31) MEDIDO (lab)
 P.L      = 0.150;     % [m] rango util (VI y Tempsonic: 0-150 mm)       MEDIDO (lab)
 P.L_fis  = 0.300;     % [m] carrera fisica del cilindro (tope)          MEDIDO (lab)
@@ -56,16 +56,17 @@ P.i_nom = 0.040;      % [A] corriente nominal (codigo L, paralelo)      CATALOGO
 P.u_max = 10;         % [V] rango del AO NI 9263
 P.Q_nom = 4.0/60000;  % [m^3/s] 4 L/min a 35 bar por arista             CATALOGO
 P.dP_nom = 35e5;      % [Pa] caida nominal por arista                   CATALOGO
-P.kQ    = 0.505;      % [-] factor sobre el caudal nominal              AJUSTADO 2026-10-31 (0.828 x 122.7/201.1, valida RMS 0.04/0.11 mm/s)
-%   (el catalogo da +-10 %; el ajuste pide -17 %: incluye la viscosidad
-%   real del aceite y la presion de suministro, que no se conoce con certeza)
-P.x0    = 0.0198;     % [-] offset de null del carrete (1 = 100 %)      AJUSTADO
-%   Equivale a ~0.2 V de comando. Moog admite <= 2 % de deriva por 55 C,
-%   y el null medido se movio 71 mV en 10 min (CLAUDE.md sec. 5.0): NO es
-%   constante, varia con la temperatura del aceite.
-P.xu    = 0.0111;     % [-] sobrecubrimiento negativo (underlap)        AJUSTADO
-%   Jelali ec. 4.5-4.6. Representa la fuga del "centro critico practico"
-%   (holgura radial). Es la que deja caer el peso a comando nulo.
+P.kQ    = 0.9235;     % [-] factor sobre el caudal nominal              AJUSTADO 2026-11-04 (con 160/80 y Qp 3.18; RMS 0.0135 mm/s contra la ley medida)
+%   (el catalogo da +-10 %; el ajuste pide -8 %: incluye la viscosidad real del
+%   aceite y la presion de suministro. Antes 0.505 con 125/80, ya descartado.)
+P.x0    = 0.03218;    % [-] offset de null del carrete (1 = 100 %)      AJUSTADO 2026-11-04
+%   Equivale a ~0.32 V de comando (el null medido es -0.37 V, es decir 3.7 %). Moog
+%   admite <= 2 % de deriva por 55 C, y el null medido se movio 71 mV en 10 min
+%   (CLAUDE.md sec. 5.0): NO es constante, varia con la temperatura del aceite.
+P.xu    = 0;          % [-] sobrecubrimiento negativo (underlap)        AJUSTADO 2026-11-04
+%   Jelali ec. 4.5-4.6. El ajuste con 160/80 lo lleva a 0 (1e-5): carrete zero-lap,
+%   como dice el catalogo. El 0.0111 anterior compensaba la geometria 125/80 errada.
+%   La caida a comando 0 V (+0.138 mm/s, medido +0.14) sale de x0, no de la fuga.
 P.p_lam = 1e5;        % [Pa] transicion laminar-turbulenta del orificio  SUPUESTO
 %   sqrt(|dp|) se reemplaza por dp/sqrt(|dp|+p_lam): turbulento para
 %   |dp| >> 1 bar, laminar cerca de 0 (evita la derivada infinita).
@@ -76,11 +77,14 @@ P.supply_dyn = 1;     % 1 = presion de suministro dinamica, 0 = Ps constante
 P.Ps0   = 100e5;      % [Pa] presion de suministro / tarado limitadora   MEMORIA
 P.Ps_ini = P.Ps0;    % [Pa] presion de suministro inicial (acumulador cargado)
 P.PT    = 2e5;        % [Pa] presion de retorno (manguera 14 m ~1.4 bar) MEMORIA
-P.Qp    = 1.7/60000;  % [m^3/s] caudal de la bomba                       PLACA UPH 50 (02/2015)
-%   Prueba de saturacion 2026-10-31 (results/saturacion.csv): a +-10 V la presion
-%   de suministro cae a ~47 bar y la velocidad decae al vaciarse el acumulador;
-%   con 125/80 el caudal implicito queda entre 1.2 y 1.9 L/min, coherente con la
-%   placa. Los 3.92 mm/s de la curva 08-21 los aportaba el acumulador.
+P.Qp    = 3.18/60000; % [m^3/s] caudal de la bomba                       MEDIDO (tope de caudal 2026-10-31)
+%   Prueba de saturacion 2026-10-31: extendiendo a +10 V la velocidad decae de 4.0 a
+%   2.64 mm/s al vaciarse el acumulador; con A_A = 201.1 cm2 (D = 160 mm) eso es 3.18
+%   L/min. El modelo con 160/80, Qp = 3.18 y kQ = 0.9235 reproduce 4.07 -> 2.64 mm/s.
+%   La placa de la UPH dice 1.7 (probablemente 1.7 cm3/rev: x 1730-1870 rpm da 2.9-3.2
+%   L/min). OJO: al retraer a -10 V el modelo da 3.5 mm/s y se midio 2.5-2.7; la presion
+%   de suministro "~47 bar" de 2026-10-31 venia de los sensores con cables invertidos:
+%   repetir la prueba de saturacion con el cableado definitivo.
 P.dP_rv = 2e5;        % [Pa] sobrepresion de la limitadora a caudal Qp  SUPUESTO
 P.V_s   = 0.6e-3;     % [m^3] manguera P (7.5 m, DI 9.5 mm) + manifold  MEMORIA
 P.V_acc = 0.75e-3;    % [m^3] volumen del acumulador de vejiga           SUPUESTO
@@ -117,10 +121,14 @@ P.F_rot  = 1e12;      % [N] fuerza de rotura (la rigidez desaparece)
 %% 8. Sensores y adquisicion (MEDIDO, CLAUDE.md sec. 2.4 y sec. 5.0)
 P.Kx_sens = 15;       % [mm/V] posicion 0-150 mm sobre 0-10 V
 P.KF_sens = 20;       % [kN/V] celda (Krenel 0-10 V; LabVIEW usa MEAN x 20)
-P.pA_off  = 1.9697;   % [V] canal ai2 a presion nula
-P.pA_esc  = 32.293;   % [bar/V]
-P.pB_off  = 1.9801;   % [V] canal ai3 a presion nula
-P.pB_esc  = 18.163;   % [bar/V]
+% PROVISIONAL 2026-11-04: cableado definitivo A=FOX TR44.2 0-100 bar -> ai2, B=FOX TR49.2
+% 0-400 bar -> ai3 (antes estaban invertidos; la calibracion de agosto, 32.293/18.163
+% bar/V con ceros 1.9697/1.9801 V, quedo obsoleta). Ceros medidos hoy con la UPH parada
+% (5 s a 1 kHz); escalas de hoja de datos (16 mA sobre 500 ohm = 8 V de span).
+P.pA_off  = 1.9826;   % [V] canal ai2 a presion nula                       MEDIDO
+P.pA_esc  = 12.5;     % [bar/V] 100 bar / 8 V                              CATALOGO
+P.pB_off  = 1.9682;   % [V] canal ai3 a presion nula                       MEDIDO
+P.pB_esc  = 50;       % [bar/V] 400 bar / 8 V                              CATALOGO (manometro: 54.5)
 P.ruido_on = 0;       % 1 = anade el ruido medido de los sensores
 P.sig_x  = 0.105;     % [mm]  sigma posicion a 1 kHz                     MEDIDO
 P.sig_F  = 0.422;     % [kN]                                             MEDIDO
@@ -132,8 +140,8 @@ P.Ts_ctrl  = 0.020;   % [s] periodo del lazo de control
 
 %% 9. Condiciones iniciales y simulacion
 P.x_ini  = 0.075;     % [m] posicion inicial
-P.PA_ini = 30e5;      % [Pa] presiones iniciales (cerca del equilibrio en reposo)
-P.PB_ini = 52e5;
+P.PA_ini = 34.7e5;    % [Pa] presiones iniciales: reposo con la UPH en marcha a U_NULL   MEDIDO
+P.PB_ini = 46.9e5;    %   (2026-11-04, hoja de datos; relacion 1.35)
 P.t_fin  = 10;        % [s]
 
 %% Sobrescrituras por argumento
