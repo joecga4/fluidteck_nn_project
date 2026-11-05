@@ -76,9 +76,9 @@ bar; B: 50 bar/V, TR49.2 0–400 bar; ceros 1.9826 / 1.9682 V):
   inferido quedan descartados** (partían de presiones medidas con los cables invertidos).
 
 **Pendiente:** repetir la serie con la UPH a otra temperatura y, si se puede, con otra
-viga/posición; confirmar con la placa del cilindro; actualizar `params_prensa.m`, `PID.c` y
-`tools/planta.py` (aún con 125/80 o 160/100) y **revalidar el modelo Simulink**, cuyos
-parámetros (kQ, x0, xu, Ps, volúmenes) se ajustaron con 125 mm. Fuerza hidráulica:
+viga/posición; confirmar con la placa del cilindro. `params_prensa.m`, `PID.c` y el modelo
+Simulink ya se actualizaron a 160/80 el 2026-11-04 (§3); queda repetir la prueba de
+saturación con el cableado definitivo. Fuerza hidráulica:
 `F = P_A·A_A − P_B·A_B` (cilindro asimétrico).
 
 **Episodio de sobrecarga (informado por el laboratorio, 2026-11-02).** El equipo llegó
@@ -189,9 +189,25 @@ a comando 0 V el vástago se extiende a +0.138 mm/s (medido +0.14) y en el null 
 presiones en reposo a U_NULL **36.0 / 49.6 bar** (medido 34.7 / 46.9; antes 38.7 / 69.1);
 saturación a +10 V: la velocidad decae de **4.07 a 2.64 mm/s** (medido 4.0 → 2.64), lo que
 exige 3.18 L/min con A_A = 201 cm²: otra confirmación de D = 160 mm.
-**Pendiente:** retrayendo a −10 V el modelo da 3.5 mm/s y se midió 2.5–2.7; la presión de
-suministro «~47 bar» de la prueba de 2026-10-31 viene de los sensores con cables invertidos
-y no vale: repetir la prueba de saturación (`Prensa.satura`) con el cableado definitivo.
+**Prueba de saturación repetida el 2026-11-04** (`Prensa.satura`, cableado definitivo, 160/80,
+sin probeta, recorrido 26–124 mm; `results/saturacion.csv`):
+- **Extendiendo (baja, a favor de la gravedad) a +10 V:** v = 4.11 → 2.56 mm/s al vaciarse el
+  acumulador (en 20 s); meseta = **3.08 L/min** (A_A·v) ≈ caudal de la bomba (3.18). P_A cae de
+  30 a 9 bar y P_B de 40 a 12 bar. El modelo reproduce 4.28 → 2.64. Confirma la bomba de 3.18
+  L/min y el área de 201 cm².
+- **Retrayendo (sube, contra la gravedad) a −10 V:** v = 2.47 → **2.63 mm/s, sin decaer** (caudal
+  hacia B = 2.38 L/min, **menor** que el de la bomba); P_A ≈ 24.5 y P_B ≈ 33.6 bar. Relación
+  retraer/extender = **1.03** (no 1.33 ni 0.85). El modelo con suministro de 100 bar da 3.5 mm/s y
+  P_A/P_B = 52/71 bar, **no cuadra**; con la presión de suministro limitada a ~48 bar da 2.36 mm/s y
+  25/35 bar, que sí cuadra en presiones.
+- **Lectura:** con la misma constante de orificio en las dos aristas de la válvula, el caudal de
+  retorno de A (3.17 L/min a ΔP ≈ 23 bar) implica ~47 bar de suministro disponible al retraer,
+  mientras que al arrancar la extensión (4.9 L/min a P_A = 30 bar) hacen falta ~90 bar. Hay
+  **una limitación de presión en el lado B (≈ 48–50 bar) que no conocemos**: o la limitadora
+  está tarada hacia 48 bar (y al extender el acumulador la supera un instante), o hay una
+  válvula de contrapeso/limitadora en la línea de la cámara anular. **Por verificar:** leer el
+  manómetro de la UPH (suministro) con la bomba en marcha en reposo y durante un recorrido a
+  −10 V. Si marca ~50 bar, la fuerza máxima de extensión sería ≈ 96 kN y no 200 kN.
 Antes de este cambio el modelo se había validado con 125/80 (RMS 0.039 / 0.108 mm/s).
 
 ---
@@ -225,11 +241,10 @@ Antes de este cambio el modelo se había validado con 125/80 (RMS 0.039 / 0.108 
 | Modelo Simulink | **actualizado y revalidado el 2026-11-04 con 160/80** (§3): RMS 0.0138 mm/s, saturación +10 V reproducida. Falta repetir la prueba de saturación con el cableado definitivo (retracción −10 V: modelo 3.5 vs medido 2.5–2.7 mm/s) y revisar Ps, volúmenes y acumulador |
 | Diámetro interior del cilindro | **medido 160 mm** (ajuste 161.5 ± 3 mm, 2026-11-04, §2.3); falta repetir a otra temperatura/posición y confirmar con la placa |
 | Episodio de 170–180 kN (soldadura del manifold) | recuperar fecha y presiones (`fuerzavscarga18.xls` de 2017, en el respaldo) y verificar el estado y la presión de diseño del manifold antes de presurizar cerca de 100 bar |
-| `PID.c` (Formula Node de la v15) | **Actualizado el 2026-11-04** (verificado con 320 000 pasos de prueba diferencial: el controlador es idéntico al anterior; solo cambia la lógica de presiones): convención única **`pa` = cámara A sin vástago (`ai2`), `pb` = cámara B con vástago (`ai3`)**, llegan **en bar reales** (se escalan en el diagrama, antes del nodo: `pa = (V_ai2 − 1.9826)·12.5`, `pb = (V_ai3 − 1.9682)·50`); `Fp = 2.0106·pa − 1.5080·pb` (160/80 mm); `PAmax` = 95 bar; `Lg[12..14]` = pa, pb, Fp. **Falta:** cablear los dos escalados en el diagrama de la VI, conectar `ai2`→`pa` y `ai3`→`pb`, y pegar el texto en el Formula Node (VI detenida, UPH apagada). El corte por presión sigue **desactivado** (`protPres = 0`); reactivarlo tras comprobar con la UPH en marcha que `Lg[12]`/`Lg[13]` marcan ≈ 34/47 bar a −0.37 V y `Lg[14]` ≈ celda. Decisión pendiente: `Fcorte` 160 kN ≈ 80 bar y 200 kN ≈ 100 bar: **160 kN ya está en la zona del episodio de la soldadura (§2.3)**, bajarlo |
+| `PID.c` (Formula Node de la v15) | **Actualizado el 2026-11-04** (verificado con 320 000 pasos de prueba diferencial: el controlador es idéntico al anterior; solo cambia la lógica de presiones): convención única **`pa` = cámara A sin vástago (`ai2`), `pb` = cámara B con vástago (`ai3`)**, llegan **en bar reales** (se escalan en el diagrama, antes del nodo: `pa = (V_ai2 − 1.9826)·12.5`, `pb = (V_ai3 − 1.9682)·50`); `Fp = 2.0106·pa − 1.5080·pb` (160/80 mm); `PAmax` = 95 bar; `Lg[12..14]` = pa, pb, Fp. **En la VI (2026-11-04):** los dos escalados están cableados (`ai2`→`pa`, `ai3`→`pb`) y el texto está pegado en el Formula Node (el archivo `.vi` contiene el `PID.c` actual, verificado). **Falta probarla con la UPH en marcha.** El corte por presión sigue **desactivado** (`protPres = 0`); reactivarlo tras comprobar con la UPH en marcha que `Lg[12]`/`Lg[13]` marcan ≈ 34/47 bar a −0.37 V y `Lg[14]` ≈ celda. Decisión pendiente: `Fcorte` 160 kN ≈ 80 bar y 200 kN ≈ 100 bar: **160 kN ya está en la zona del episodio de la soldadura (§2.3)**, bajarlo |
 | Manómetro de la UPH | leer en reposo (tarado real de la limitadora) y durante un recorrido a ±10 V; el modelo da Ps ≈ 100 bar al retraer y la medida ~47 bar |
 | Acumulador | buscar placa (volumen, precarga) |
 | Escalas de presión | **bloquea la prueba del diámetro.** Resuelto el 2026-11-04: cableado definitivo (A→`ai2`, B→`ai3`, §2.4) y escalas de hoja de datos con ceros medidos, validadas por la serie de fuerza (offset 0 kN). Ya aplicadas en `params_prensa.m`, `Prensa.m` y `PID.c`; falta aplicarlas en el diagrama de la VI y revisar el log y los archivos de agosto |
-| `tools/planta.py` (fuera del repo) | sigue con 160/100: actualizar a 160/80 (D ya confirmado, §2.3) |
 | Fricción de Stribeck, volúmenes muertos | supuestos: identificar con rampas lentas a velocidad constante |
 | Seta de emergencia | verificar si corta KM1 sin la VI (§2.4) |
 | Neurocontrolador (BPTT) y comparación con el PID | sin empezar |
@@ -254,7 +269,7 @@ Cilindro de hasta 200 kN, planta casi sin amortiguamiento (δ_h ≈ 1e-3).
   solo 3 mm de separación), sin que nadie lo gobernara.
 - Límites por software: ventana de trabajo 20–130 mm (recolocación 4–146 mm),
   fuerza 50 kN, PA 110 bar, PB 130 bar.
-- LabVIEW y NI MAX reservan los módulos: cerrarlos antes de usar Python (y viceversa).
+- LabVIEW y NI MAX reservan los módulos: cerrarlos antes de usar MATLAB (`Prensa.m`) y viceversa.
 - Editar VIs solo con la VI detenida y la UPH apagada. En HBM `Init.vi`, siempre *Skip*.
 
 ---
@@ -280,6 +295,6 @@ Cilindro de hasta 200 kN, planta casi sin amortiguamiento (δ_h ≈ 1e-3).
 
 - Responder en **español**. Unidades: mm, mm/s, kN, bar, V.
 - Signo: u > 0 extiende el vástago (hacia abajo) y aumenta la posición medida.
-- Redes neuronales con numpy a mano (despliegue = pesos dentro de un VI); NARX sobre
+- Redes neuronales escritas a mano, sin toolbox (despliegue = pesos dentro de un VI); NARX sobre
   **incrementos**, métrica = **simulación libre**.
 - Antes de usar un número de la memoria de 2017, contrastarlo con este documento.

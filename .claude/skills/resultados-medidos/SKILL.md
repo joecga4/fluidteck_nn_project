@@ -5,6 +5,14 @@ description: Registro detallado de las mediciones de Fase 0 y Fase 1 sobre la pr
 
 # Resultados medidos — registro detallado
 
+> **Aviso (2026-11-04).** Este registro es histórico. (1) Los scripts de Python que cita
+> (`tools/daq.py`, `tools/planta.py`, etc.) ya no existen; el acceso al equipo es
+> `matlab/Prensa.m`. (2) **Las presiones de agosto están permutadas y mal escaladas**: los
+> cables de A y B estaban invertidos y la calibración de 2026-08-12 (32.293 / 18.163 bar/V)
+> es obsoleta (`CLAUDE.md` §2.4). (3) Los números que usan la geometría 160/100 o 125/80 son
+> anteriores a la medida del cilindro: es **160/80 mm** (`CLAUDE.md` §2.3). Posición,
+> celda y comando no se ven afectados.
+
 > Este fichero es la **sección 5 completa** del proyecto. Se separó de `CLAUDE.md` para que su
 > detalle no ocupe contexto en cada sesión, pero **sigue siendo material directo para el
 > informe** y se versiona igual que el resto del repositorio.

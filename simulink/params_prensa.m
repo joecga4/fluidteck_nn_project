@@ -11,7 +11,7 @@ function P = params_prensa(varargin)
 %   variables con la carrera (4.46-4.47), fuga interna laminar (4.55),
 %   friccion de Stribeck (4.60) y fuente de presion con limitadora (4.2.4).
 %
-%   ORIGEN DE CADA NUMERO (mismo criterio que tools/planta.py):
+%   ORIGEN DE CADA NUMERO:
 %     MEDIDO    lo dice el equipo; manda sobre lo demas
 %     AJUSTADO  ajustado a las curvas comando->velocidad medidas
 %               (results/caracterizacion_2026-08-12.csv y _0-10V_2026-08-21.csv)

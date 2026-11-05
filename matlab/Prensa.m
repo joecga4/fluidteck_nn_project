@@ -1,8 +1,9 @@
 classdef Prensa < handle
 %PRENSA  Acceso a la prensa servohidraulica UPH 50 desde MATLAB (cDAQ-9184).
 %
-%   Port de tools/planta.py + tools/daq.py. Un solo objeto lleva los numeros de
-%   la planta (propiedades Constant), el acceso al chasis y las maniobras.
+%   Sustituye a los scripts de Python de tools/ (retirados del proyecto: este es el
+%   unico acceso al equipo desde fuera de LabVIEW). Un solo objeto lleva los numeros
+%   de la planta (propiedades Constant), el acceso al chasis y las maniobras.
 %
 %   ####################  SEGURIDAD — LEER ANTES DE USAR  ####################
 %   Esto puede MOVER un cilindro de 200 kN a 100 bar con amortiguamiento casi
@@ -346,7 +347,7 @@ classdef Prensa < handle
 
         function hpu(obj, encender, o)
         %HPU  Arranca o para la UPH y registra la deriva y las DI.
-        %   A DIFERENCIA de daq.py, el puerto DO queda TOMADO al volver: la UPH
+        %   El puerto DO queda TOMADO al volver (no es un arranque puntual): la UPH
         %   sigue en marcha mientras exista el objeto (o hasta hpu(false)). Es lo
         %   que permite trabajar en lazo abierto de forma interactiva. Al destruir
         %   el objeto se escribe el patron seguro (UPH parada).
@@ -583,13 +584,13 @@ classdef Prensa < handle
                             fallo = Prensa.compruebaLimites(e);
                             if isempty(fallo), break, end
                             fprintf('    (limite rozado antes de u=%+.2f V: %s — esperando, intento %d/4)\n', u, fallo, intento);
-                            write(tao, 0);  pause(2);  flush(tai);  e = obj.leeEstado(tai, 10);
+                            write(tao, 0);  pause(2);  obj.vacia(tai);  e = obj.leeEstado(tai, 10);
                         end
                         if ~isempty(fallo)
                             fprintf('  !! ABORTA antes de u=%+.2f V: %s\n     estado: %s\n', u, fallo, formatea(e));
                             error('Prensa:corte', 'corte');
                         end
-                        write(tao, u);  flush(tai);
+                        write(tao, u);  obj.vacia(tai);
                         ts = [];  xs = [];  t0 = tic;
                         while toc(t0) < o.TPaso
                             e = obj.leeEstado(tai, 5);
@@ -646,7 +647,7 @@ classdef Prensa < handle
             end
             if o.Calienta > 0                                  % calentamiento + transitorio
                 fprintf('\n  --- calentamiento: %.0f s sosteniendo %+.3f V ---\n', o.Calienta, Prensa.U_NULL);
-                centro = 0.5*(xlo + xhi);  write(tao, Prensa.U_NULL);  flush(tai);
+                centro = 0.5*(xlo + xhi);  write(tao, Prensa.U_NULL);  obj.vacia(tai);
                 tw = [];  xw = [];  pw = [];  t0 = tic;  ult = -30;
                 while toc(t0) < o.Calienta
                     e = obj.leeEstado(tai, round(o.Fs/5));
@@ -674,12 +675,12 @@ classdef Prensa < handle
             for sent = {'extendiendo', xhi, xlo; 'retrayendo', xlo, xhi}.'
                 [nombre, destino, arranque] = sent{:};
                 fprintf('\n  --- %s: colocando en %.0f mm ---\n', nombre, arranque);
-                if ~obj.recoloca(tao, tai, arranque, signo, 'UMax', 2, 'TMax', 200, 'Verboso', false)
+                if ~obj.recoloca(tao, tai, arranque, signo, 'UMax', 2, 'TMax', 400, 'Verboso', false)
                     fprintf('  !! no se pudo colocar; se salta este sentido\n'); continue
                 end
                 u = o.UTest*signo*ternario(destino > arranque, 1, -1);
                 fprintf('  aplicando u = %+.2f V hasta %.0f mm...\n', u, destino);
-                D = zeros(0,4);  write(tao, u);  flush(tai);  t0 = tic;
+                D = zeros(0,4);  write(tao, u);  obj.vacia(tai);  t0 = tic;
                 while toc(t0) < o.TMax
                     e = obj.leeEstado(tai, round(o.Fs/10));
                     D(end+1,:) = [toc(t0) e.posicion e.presion_A e.presion_B]; %#ok<AGROW>
@@ -1005,7 +1006,7 @@ classdef Prensa < handle
 
     %% ====================================================================
     %  9. PLANTA SIMULADA (simulink/prensa_fluidtek.slx) Y EXCITACION
-    %     Sin hardware. Port de gen_excitacion.py; la planta simulada es el
+    %     Sin hardware. La planta simulada es el
     %     modelo de Jelali & Kroll del .slx, no un integrador propio.
     %% ====================================================================
     methods (Static)
@@ -1081,7 +1082,7 @@ classdef Prensa < handle
         %   duracion por presupuesto de recorrido) y CERO (deriva de null). La
         %   velocidad se sortea en escala LOGARITMICA y se despeja el comando
         %   (uParaVel): asi las bandas de los ensayos normados quedan pobladas.
-        %   La semilla es reproducible en MATLAB pero NO coincide con numpy.
+        %   La semilla es reproducible en MATLAB.
             ap = inputParser;
             ap.addParameter('DurTotal', 600);  ap.addParameter('Ts', 0.001);
             ap.addParameter('UMax', 10);       ap.addParameter('VMin', 0.05/60);
@@ -1294,6 +1295,14 @@ classdef Prensa < handle
             end
         end
 
+        function vacia(~, tai)
+        %VACIA  Descarta los datos pendientes de una AI CONTINUA en marcha. flush() no
+        %   se puede usar con la adquisicion en segundo plano (2026-11-04: "Unable to
+        %   flush during background operation"), asi que se leen y se tiran.
+            n = tai.NumScansAvailable;
+            if n > 0, read(tai, n, "OutputFormat", "Matrix"); end
+        end
+
         function e = leeEstado(obj, tai, nmin)
         %LEEESTADO  Medias de lo ACUMULADO (min nmin scans) en una AI continua.
         %   Si hay mas de 2*nmin (atraso por una pausa), solo cuentan los ultimos:
@@ -1322,10 +1331,10 @@ classdef Prensa < handle
         %   No se puede dar por sabido: un signo equivocado en un lazo P sobre un
         %   integrador no da error, da una carrera contra el tope.
             if nargin < 4, uTanteo = 1; tTanteo = 3; dxMin = 0.15; end
-            flush(tai);  e0 = obj.leeEstado(tai, 10);
+            obj.vacia(tai);  e0 = obj.leeEstado(tai, 10);
             write(tao, uTanteo);  pause(tTanteo);
             e1 = obj.leeEstado(tai, 10);
-            write(tao, 0);  pause(0.5);  flush(tai);
+            write(tao, 0);  pause(0.5);  obj.vacia(tai);
             dx = e1.posicion - e0.posicion;
             fprintf('  tanteo %+.2f V durante %.1f s -> dx = %+.3f mm\n', uTanteo, tTanteo, dx);
             if abs(dx) < dxMin
@@ -1346,8 +1355,13 @@ classdef Prensa < handle
                 o.UMax (1,1) double = 1, o.Tol (1,1) double = 1, o.TMax (1,1) double = 60, o.Verboso (1,1) logical = true
             end
             Kp = 0.08;  t0 = tic;  ok = false;
+            % Accion integral (2026-11-04): el null se mueve con la temperatura (+0.1 V
+            % tras varias corridas) y el P solo deja un error estatico de ~1.2 mm, mayor
+            % que la tolerancia. Ki = 0.002 V/(mm s), acotada a +-0.3 V, solo cerca.
+            Ki = 0.002;  integ = 0;  tPrev = 0;
             while toc(t0) < o.TMax
                 e = obj.leeEstado(tai, 10);
+                dt = toc(t0) - tPrev;  tPrev = toc(t0);
                 fallo = Prensa.compruebaLimites(e, Prensa.X_MIN_JOG, Prensa.X_MAX_JOG);
                 if ~isempty(fallo)
                     write(tao, 0);  fprintf('\n  !! ABORTA recolocacion: %s\n', fallo);  return
@@ -1358,7 +1372,8 @@ classdef Prensa < handle
                     if o.Verboso, fprintf('\r  [ok] en %.2f mm (error %+.2f mm)%s\n', e.posicion, err, repmat(' ',1,20)); end
                     return
                 end
-                u = min(max(Prensa.U_NULL + Kp*err*signo, -o.UMax), o.UMax);
+                if abs(err) < 10, integ = min(max(integ + Ki*err*signo*dt, -0.3), 0.3); end
+                u = min(max(Prensa.U_NULL + Kp*err*signo + integ, -o.UMax), o.UMax);
                 write(tao, u);
                 if o.Verboso, fprintf('\r    recolocando: x=%7.2f mm  err=%+7.2f mm  u=%+5.2f V', e.posicion, err, u); end
             end
