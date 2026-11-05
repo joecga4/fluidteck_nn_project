@@ -740,8 +740,9 @@ classdef Prensa < handle
             e0 = obj.leeEstado(tai, 10);
             fprintf('  posicion inicial: %.2f mm\n', e0.posicion);
             signo = obj.descubreSentido(tao, tai);
-            obj.recoloca(tao, tai, destino, signo, 'UMax', o.UMax, 'Tol', o.Tol, 'TMax', o.TMax);
-            fprintf('\n  AO a 0 V.\n');
+            ok = obj.recoloca(tao, tai, destino, signo, 'UMax', o.UMax, 'Tol', o.Tol, 'TMax', o.TMax, 'Verboso', false);
+            e1 = obj.leeEstado(tai, 10);
+            fprintf('  %s: x = %.2f mm (destino %.1f)\n  AO a 0 V.\n', ternario(ok, '[ok]', '!! sin converger'), e1.posicion, destino);
         end
 
         function res = escalonesFuerza(obj, o)

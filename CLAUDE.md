@@ -200,14 +200,39 @@ sin probeta, recorrido 26–124 mm; `results/saturacion.csv`):
   retraer/extender = **1.03** (no 1.33 ni 0.85). El modelo con suministro de 100 bar da 3.5 mm/s y
   P_A/P_B = 52/71 bar, **no cuadra**; con la presión de suministro limitada a ~48 bar da 2.36 mm/s y
   25/35 bar, que sí cuadra en presiones.
-- **Lectura:** con la misma constante de orificio en las dos aristas de la válvula, el caudal de
-  retorno de A (3.17 L/min a ΔP ≈ 23 bar) implica ~47 bar de suministro disponible al retraer,
-  mientras que al arrancar la extensión (4.9 L/min a P_A = 30 bar) hacen falta ~90 bar. Hay
-  **una limitación de presión en el lado B (≈ 48–50 bar) que no conocemos**: o la limitadora
-  está tarada hacia 48 bar (y al extender el acumulador la supera un instante), o hay una
-  válvula de contrapeso/limitadora en la línea de la cámara anular. **Por verificar:** leer el
-  manómetro de la UPH (suministro) con la bomba en marcha en reposo y durante un recorrido a
-  −10 V. Si marca ~50 bar, la fuerza máxima de extensión sería ≈ 96 kN y no 200 kN.
+- **Manómetro de la UPH (suministro), leído por el laboratorio el mismo día (bomba en marcha):**
+  en reposo **≈ 95 bar**; extendiendo a +10 V **parte en 95 y cae a ~25 bar**; retrayendo a
+  −10 V **parte en 95 y cae a 50 bar exactos**. Las presiones de los cilindros en esos
+  recorridos: extensión P_A 21.7 → 9.4 y P_B 28.5 → 12.3 bar; retracción P_A ≈ 26–27 y
+  P_B ≈ 36–37 bar (estables).
+- **⚠ Dato posterior del laboratorio (misma tarde):** el mínimo del manómetro **en extensión
+  varía** de una pasada a otra, pero **en retracción es siempre 50 bar exactos**. Un
+  suministro que solo se acomoda a la carga y a la fuga de la bomba también variaría en
+  retracción (la temperatura cambia la fuga); un valor fijo apunta a un **elemento que regula
+  a 50 bar** (limitadora/reductora o válvula de contrapeso del lado B) que actúa al retraer.
+  Las dos lecturas siguientes son por tanto **provisionales**: la caída del caudal podría ser
+  fuga de la bomba, un límite de 50 bar, o ambas. **Prueba decisiva (pendiente):** retraer a
+  −10, −5, −3 y −1 V y leer el manómetro en cada una: si marca 50 en todas (incluso a baja
+  velocidad, donde la carga exigiría ~35 bar), hay un regulador a 50 bar; si baja con la
+  velocidad, es la bomba. Repetir también con el aceite a otra temperatura.
+- **Interpretación provisional (a falta de esa prueba): la bomba pierde caudal con la
+  presión.** El suministro se acomoda a la carga: ≈ 25 bar (P_A 9 + caída de la válvula) al
+  extender y ≈ 50 bar (P_B 34 + caída de la válvula) al retraer, y a esas presiones la
+  bomba entrega **3.08 y 2.38 L/min**. Ajuste lineal: **Q_bomba ≈ 3.8 − 0.028·P_s [L/min, P_s en
+  bar]** (≈ 3.8 L/min sin presión; coherente con ~2.2 cm³/rev a 1730 rpm; la placa dice
+  «1.7», que sería cm³/rev solo si el engranaje es más chico de lo que parece). Así, la
+  relación de caudales retraer/extender medida es 2.38 / 3.08 = 0.77 (velocidades 2.63 y
+  2.55 mm/s por áreas 150.8 y 201.1 cm²), que es la de la bomba a 50 y a 25 bar, y no 1.33
+  ni 0.85 como suponía la etiqueta de la prueba. A 95 bar la bomba entrega ~1.1 L/min, que
+  se va por la limitadora (≈ 95–100 bar en reposo).
+- **Consecuencias:** (1) el modelo con caudal de bomba constante (3.18 L/min) no puede
+  reproducir la retracción; hace falta un **término de fuga/deslizamiento de la bomba**
+  (`Q_p = Q0 − C·P_s`, C ≈ 4.7e-12 m³/(s·Pa), Q0 ≈ 3.8 L/min) en el subsistema de
+  suministro del `.slx`, y volver a ajustar `kQ`; (2) la **limitadora está en ~95–100 bar**:
+  la fuerza máxima estática de extensión sigue siendo ≈ 190–200 kN, y el episodio de
+  170–180 kN fue con la presión de trabajo normal (§2.3); (3) la **velocidad máxima** al
+  retraer es ~2.6 mm/s y al extender ~2.6 mm/s sostenido (4.1 mm/s solo mientras dura el
+  acumulador), útil para dimensionar rampas del controlador.
 Antes de este cambio el modelo se había validado con 125/80 (RMS 0.039 / 0.108 mm/s).
 
 ---
