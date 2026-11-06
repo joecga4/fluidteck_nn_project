@@ -56,10 +56,10 @@ P.i_nom = 0.040;      % [A] corriente nominal (codigo L, paralelo)      CATALOGO
 P.u_max = 10;         % [V] rango del AO NI 9263
 P.Q_nom = 4.0/60000;  % [m^3/s] 4 L/min a 35 bar por arista             CATALOGO
 P.dP_nom = 35e5;      % [Pa] caida nominal por arista                   CATALOGO
-P.kQ    = 0.9235;     % [-] factor sobre el caudal nominal              AJUSTADO 2026-11-04 (con 160/80 y Qp 3.18; RMS 0.0135 mm/s contra la ley medida)
+P.kQ    = 0.9770;     % [-] factor sobre el caudal nominal              AJUSTADO 2026-11-05 (160/80, Qp 3.18 y limitadora blanda; RMS 0.0178 mm/s contra la ley medida)
 %   (el catalogo da +-10 %; el ajuste pide -8 %: incluye la viscosidad real del
 %   aceite y la presion de suministro. Antes 0.505 con 125/80, ya descartado.)
-P.x0    = 0.03218;    % [-] offset de null del carrete (1 = 100 %)      AJUSTADO 2026-11-04
+P.x0    = 0.03094;    % [-] offset de null del carrete (1 = 100 %)      AJUSTADO 2026-11-05
 %   Equivale a ~0.32 V de comando (el null medido es -0.37 V, es decir 3.7 %). Moog
 %   admite <= 2 % de deriva por 55 C, y el null medido se movio 71 mV en 10 min
 %   (CLAUDE.md sec. 5.0): NO es constante, varia con la temperatura del aceite.
@@ -74,8 +74,12 @@ P.histeresis = 0;     % [-] ancho de histeresis del carrete (<=0.03)    CATALOGO
 
 %% 4. Fuente de presion (Jelali 4.2.4): bomba + limitadora + acumulador + manguera
 P.supply_dyn = 1;     % 1 = presion de suministro dinamica, 0 = Ps constante
-P.Ps0   = 100e5;      % [Pa] presion de suministro / tarado limitadora   MEMORIA
-P.Ps_ini = P.Ps0;    % [Pa] presion de suministro inicial (acumulador cargado)
+P.Ps0   = 43e5;       % [Pa] presion a la que la limitadora EMPIEZA a abrir  AJUSTADO 2026-11-05
+P.Ps_ini = 97e5;      % [Pa] presion de suministro inicial = reposo con la UPH en marcha   MEDIDO
+%   (manometro de la UPH 96-98 bar, 2026-11-05). Limitadora BLANDA: con caudal completo
+%   de la bomba (Qp) la presion llega a Ps0 + dP_rv ~ 100 bar. Con la limitadora rigida
+%   a 100 bar que tenia el modelo, la retraccion a -10 V salia a 3.5 mm/s y 52/71 bar;
+%   medido 2.9 mm/s y 30/41 bar con suministro de 55-60 bar.
 P.PT    = 2e5;        % [Pa] presion de retorno (manguera 14 m ~1.4 bar) MEMORIA
 P.Qp    = 3.18/60000; % [m^3/s] caudal de la bomba                       MEDIDO (tope de caudal 2026-10-31)
 %   Prueba de saturacion 2026-10-31: extendiendo a +10 V la velocidad decae de 4.0 a
@@ -85,7 +89,7 @@ P.Qp    = 3.18/60000; % [m^3/s] caudal de la bomba                       MEDIDO 
 %   L/min). OJO: al retraer a -10 V el modelo da 3.5 mm/s y se midio 2.5-2.7; la presion
 %   de suministro "~47 bar" de 2026-10-31 venia de los sensores con cables invertidos:
 %   repetir la prueba de saturacion con el cableado definitivo.
-P.dP_rv = 2e5;        % [Pa] sobrepresion de la limitadora a caudal Qp  SUPUESTO
+P.dP_rv = 57e5;       % [Pa] sobrepresion de la limitadora a caudal Qp   AJUSTADO 2026-11-05 (retraccion a -10/-5/-3/-1 V con manometro: suministro 55/85/90/90 bar)
 P.V_s   = 0.6e-3;     % [m^3] manguera P (7.5 m, DI 9.5 mm) + manifold  MEMORIA
 P.V_acc = 0.75e-3;    % [m^3] volumen del acumulador de vejiga           SUPUESTO
 P.p_acc0 = 60e5;      % [Pa] precarga de nitrogeno                       SUPUESTO

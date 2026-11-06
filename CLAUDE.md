@@ -177,62 +177,58 @@ topes y sensores con escala, ruido, ADC y latencia.
 
 - `params_prensa.m`: todos los parámetros, cada uno con su origen (MEDIDO / PLACA /
   CATÁLOGO / AJUSTADO / SUPUESTO). **Actualizado el 2026-11-04 a la geometría medida:
-  160/80 mm (§2.3), Qp 3.18 L/min, kQ 0.9235, x0 3.22 %, xu 0 (zero-lap)**, L_fis 0.300 m,
-  presiones iniciales 34.7/46.9 bar, escalas de presión de hoja de datos (§2.4).
+  160/80 mm (§2.3), Qp 3.18 L/min, kQ 0.977, x0 3.09 %, xu 0 (zero-lap)**, limitadora blanda
+  (`Ps0` 43 bar, `dP_rv` 57 bar, `Ps_ini` 97 bar, 2026-11-05), L_fis 0.300 m, presiones
+  iniciales 34.7/46.9 bar, escalas de presión de hoja de datos (§2.4).
 - `prensa_fluidtek.slx`: generado por `construir_modelo_prensa.m`; validación con
   `validar_modelo_prensa.m` y `sim_satura.m` (estos scripts y los resultados están fuera
   del repositorio, en el respaldo de `D:\fluidteck_project`).
 
-**Validación con los parámetros de 2026-11-04** (`Prensa.simula`, sin sobrescrituras):
-curva comando→velocidad (ley medida de §4) RMS **0.0138 mm/s** (antes 0.042 con 125/80);
+**Validación con los parámetros de 2026-11-05** (`Prensa.simula`, sin sobrescrituras; los de
+2026-11-04, con limitadora rígida, daban RMS 0.0138 pero no reproducían la retracción):
+curva comando→velocidad (ley medida de §4) RMS **0.0162 mm/s** (antes 0.042 con 125/80);
 a comando 0 V el vástago se extiende a +0.138 mm/s (medido +0.14) y en el null a −0.017;
 presiones en reposo a U_NULL **36.0 / 49.6 bar** (medido 34.7 / 46.9; antes 38.7 / 69.1);
-saturación a +10 V: la velocidad decae de **4.07 a 2.64 mm/s** (medido 4.0 → 2.64), lo que
+saturación a +10 V: la velocidad decae de **3.91 a 2.64 mm/s** (medido 4.0 → 2.64), lo que
 exige 3.18 L/min con A_A = 201 cm²: otra confirmación de D = 160 mm.
-**Prueba de saturación repetida el 2026-11-04** (`Prensa.satura`, cableado definitivo, 160/80,
-sin probeta, recorrido 26–124 mm; `results/saturacion.csv`):
-- **Extendiendo (baja, a favor de la gravedad) a +10 V:** v = 4.11 → 2.56 mm/s al vaciarse el
-  acumulador (en 20 s); meseta = **3.08 L/min** (A_A·v) ≈ caudal de la bomba (3.18). P_A cae de
-  30 a 9 bar y P_B de 40 a 12 bar. El modelo reproduce 4.28 → 2.64. Confirma la bomba de 3.18
-  L/min y el área de 201 cm².
-- **Retrayendo (sube, contra la gravedad) a −10 V:** v = 2.47 → **2.63 mm/s, sin decaer** (caudal
-  hacia B = 2.38 L/min, **menor** que el de la bomba); P_A ≈ 24.5 y P_B ≈ 33.6 bar. Relación
-  retraer/extender = **1.03** (no 1.33 ni 0.85). El modelo con suministro de 100 bar da 3.5 mm/s y
-  P_A/P_B = 52/71 bar, **no cuadra**; con la presión de suministro limitada a ~48 bar da 2.36 mm/s y
-  25/35 bar, que sí cuadra en presiones.
-- **Manómetro de la UPH (suministro), leído por el laboratorio el mismo día (bomba en marcha):**
-  en reposo **≈ 95 bar**; extendiendo a +10 V **parte en 95 y cae a ~25 bar**; retrayendo a
-  −10 V **parte en 95 y cae a 50 bar exactos**. Las presiones de los cilindros en esos
-  recorridos: extensión P_A 21.7 → 9.4 y P_B 28.5 → 12.3 bar; retracción P_A ≈ 26–27 y
-  P_B ≈ 36–37 bar (estables).
-- **⚠ Dato posterior del laboratorio (misma tarde):** el mínimo del manómetro **en extensión
-  varía** de una pasada a otra, pero **en retracción es siempre 50 bar exactos**. Un
-  suministro que solo se acomoda a la carga y a la fuga de la bomba también variaría en
-  retracción (la temperatura cambia la fuga); un valor fijo apunta a un **elemento que regula
-  a 50 bar** (limitadora/reductora o válvula de contrapeso del lado B) que actúa al retraer.
-  Las dos lecturas siguientes son por tanto **provisionales**: la caída del caudal podría ser
-  fuga de la bomba, un límite de 50 bar, o ambas. **Prueba decisiva (pendiente):** retraer a
-  −10, −5, −3 y −1 V y leer el manómetro en cada una: si marca 50 en todas (incluso a baja
-  velocidad, donde la carga exigiría ~35 bar), hay un regulador a 50 bar; si baja con la
-  velocidad, es la bomba. Repetir también con el aceite a otra temperatura.
-- **Interpretación provisional (a falta de esa prueba): la bomba pierde caudal con la
-  presión.** El suministro se acomoda a la carga: ≈ 25 bar (P_A 9 + caída de la válvula) al
-  extender y ≈ 50 bar (P_B 34 + caída de la válvula) al retraer, y a esas presiones la
-  bomba entrega **3.08 y 2.38 L/min**. Ajuste lineal: **Q_bomba ≈ 3.8 − 0.028·P_s [L/min, P_s en
-  bar]** (≈ 3.8 L/min sin presión; coherente con ~2.2 cm³/rev a 1730 rpm; la placa dice
-  «1.7», que sería cm³/rev solo si el engranaje es más chico de lo que parece). Así, la
-  relación de caudales retraer/extender medida es 2.38 / 3.08 = 0.77 (velocidades 2.63 y
-  2.55 mm/s por áreas 150.8 y 201.1 cm²), que es la de la bomba a 50 y a 25 bar, y no 1.33
-  ni 0.85 como suponía la etiqueta de la prueba. A 95 bar la bomba entrega ~1.1 L/min, que
-  se va por la limitadora (≈ 95–100 bar en reposo).
-- **Consecuencias:** (1) el modelo con caudal de bomba constante (3.18 L/min) no puede
-  reproducir la retracción; hace falta un **término de fuga/deslizamiento de la bomba**
-  (`Q_p = Q0 − C·P_s`, C ≈ 4.7e-12 m³/(s·Pa), Q0 ≈ 3.8 L/min) en el subsistema de
-  suministro del `.slx`, y volver a ajustar `kQ`; (2) la **limitadora está en ~95–100 bar**:
-  la fuerza máxima estática de extensión sigue siendo ≈ 190–200 kN, y el episodio de
-  170–180 kN fue con la presión de trabajo normal (§2.3); (3) la **velocidad máxima** al
-  retraer es ~2.6 mm/s y al extender ~2.6 mm/s sostenido (4.1 mm/s solo mientras dura el
-  acumulador), útil para dimensionar rampas del controlador.
+**Suministro hidráulico: resuelto el 2026-11-05 (limitadora blanda).** Pruebas del 2026-11-04 y
+2026-11-05 con el cableado definitivo, 160/80, sin probeta, y con el manómetro de la UPH
+leído por el laboratorio (`Prensa.satura` y retracciones a varios comandos;
+`results/saturacion.csv`):
+
+| Maniobra | v [mm/s] | P_A / P_B cilindros [bar] | Manómetro de la UPH [bar] |
+|---|---|---|---|
+| Reposo, bomba en marcha (AO en el null) | 0 | 34.7 / 46 | **96–98** |
+| Extendiendo +10 V (baja, a favor de la gravedad) | 4.1 → 2.56 | 26 → 10 / 34 → 13 | 95 → **~40** (ayer 25–40) |
+| Retrayendo −10 V (sube, contra la gravedad) | 2.9 (ayer 2.63) | 30 / 41 (ayer 24.5 / 33.6) | **55** (ayer 50) |
+| Retrayendo −5 V | 1.77 | 46 / 62.5 | **85** |
+| Retrayendo −3 V | 1.00 | 47 / 64 | **90** |
+| Retrayendo −1 V | 0.26 | 42 / 57 | **90** |
+
+- **Lo que explica todo: la limitadora es «blanda»** (gran sobrepresión): empieza a abrir hacia
+  **43 bar** y solo deja pasar el caudal completo de la bomba (3.18 L/min) hacia **~100 bar**.
+  Con poco caudal de consumo (−1, −3, −5 V) el suministro queda cerca de 85–98 bar; con la
+  válvula abierta del todo (−10 V) el consumo (2.7 L/min) lo hunde a 55–60; en la extensión
+  el consumo (3.1 L/min) lo deja en ~40. Con la limitadora rígida a 100 bar que tenía el
+  modelo la retracción a −10 V salía a 3.5 mm/s y 52/71 bar (medido 2.9 y 30/41).
+- **Descartado:** un regulador fijo a 50 bar (las cámaras llegan a 57–67 bar a −5/−3/−1 V),
+  una limitadora tarada a ~48 bar (en reposo hay 96–98) y la fuga lineal de la bomba (misma
+  curva, peor ajuste). **Los 50 bar «exactos» de la retracción de 2026-11-04 eran el
+  suministro a −10 V** (hoy 55): depende del consumo, no es un tarado.
+- **Bomba:** meseta de la extensión = **3.08 L/min** (A_A·v) ≈ 3.18 L/min medido; el área de
+  201 cm² y D = 160 mm se confirman. Las presiones de las cámaras a −1/−3/−5 V suben porque el
+  carrete casi cerrado exige más caída de presión para el mismo caudal.
+- **Modelo (`params_prensa.m`, 2026-11-05):** `Ps0` = 43 bar (inicio de apertura), `dP_rv` = 57
+  bar, `Ps_ini` = 97 bar, con `kQ` = 0.977 y `x0` = 3.09 % reajustados. Retracción
+  modelo/medido: −10 V 2.71/2.90 mm/s, cilindros 29/41 vs 30/41 bar, suministro 56 vs 55;
+  −5 V 1.55/1.77 mm/s; −3 V 0.95/1.00; −1 V 0.26/0.26 (errores de 10–20 % en las presiones
+  de −5 y −1 V); extensión 3.91 → 2.64 mm/s con suministro 88 → 34 bar (medido ~40).
+- **Consecuencias:** (1) **limitadora ≈ 96–100 bar**: la fuerza máxima estática de extensión
+  es ≈ 190–200 kN, y el episodio de 170–180 kN fue con presión de trabajo normal (§2.3);
+  (2) velocidad máxima sostenida ≈ 2.6 mm/s al extender y ≈ 2.9 al retraer (4.1 mm/s solo
+  mientras dura el acumulador), útil para dimensionar rampas del controlador; (3) la
+  fuerza que el equipo puede sostener a baja velocidad es mayor que la que puede aplicar a
+  alta, porque el suministro se hunde cuando el consumo se acerca al caudal de la bomba.
 Antes de este cambio el modelo se había validado con 125/80 (RMS 0.039 / 0.108 mm/s).
 
 ---
@@ -263,11 +259,11 @@ Antes de este cambio el modelo se había validado con 125/80 (RMS 0.039 / 0.108 
 | VI v15 (reserva automática del cDAQ, protección NaN) | en uso; falta prueba tras reinicio completo con UPH encendida |
 | Licencia driver HBM LabVIEW (QuantumX MX840B) | vencía ~2026-11-05; cotización pedida a HBK el 2026-10-28; si vence, registrar en catman (el control por cDAQ no depende de ella) |
 | Diagrama eléctrico CADe_SIMU | hecho y simulado con las E/S reales (§2.4) |
-| Modelo Simulink | **actualizado y revalidado el 2026-11-04 con 160/80** (§3): RMS 0.0138 mm/s, saturación +10 V reproducida. Falta repetir la prueba de saturación con el cableado definitivo (retracción −10 V: modelo 3.5 vs medido 2.5–2.7 mm/s) y revisar Ps, volúmenes y acumulador |
+| Modelo Simulink | **actualizado y revalidado el 2026-11-05 con 160/80 y limitadora blanda** (§3): RMS 0.0162 mm/s, extensión y retracción reproducidas (10–20 % en presiones intermedias). Falta: acumulador (volumen/precarga supuestos), volúmenes muertos, fricción, y repetir con otra temperatura del aceite |
 | Diámetro interior del cilindro | **medido 160 mm** (ajuste 161.5 ± 3 mm, 2026-11-04, §2.3); falta repetir a otra temperatura/posición y confirmar con la placa |
 | Episodio de 170–180 kN (soldadura del manifold) | recuperar fecha y presiones (`fuerzavscarga18.xls` de 2017, en el respaldo) y verificar el estado y la presión de diseño del manifold antes de presurizar cerca de 100 bar |
-| `PID.c` (Formula Node de la v15) | **Actualizado el 2026-11-04** (verificado con 320 000 pasos de prueba diferencial: el controlador es idéntico al anterior; solo cambia la lógica de presiones): convención única **`pa` = cámara A sin vástago (`ai2`), `pb` = cámara B con vástago (`ai3`)**, llegan **en bar reales** (se escalan en el diagrama, antes del nodo: `pa = (V_ai2 − 1.9826)·12.5`, `pb = (V_ai3 − 1.9682)·50`); `Fp = 2.0106·pa − 1.5080·pb` (160/80 mm); `PAmax` = 95 bar; `Lg[12..14]` = pa, pb, Fp. **En la VI (2026-11-04):** los dos escalados están cableados (`ai2`→`pa`, `ai3`→`pb`) y el texto está pegado en el Formula Node (el archivo `.vi` contiene el `PID.c` actual, verificado). **Falta probarla con la UPH en marcha.** El corte por presión sigue **desactivado** (`protPres = 0`); reactivarlo tras comprobar con la UPH en marcha que `Lg[12]`/`Lg[13]` marcan ≈ 34/47 bar a −0.37 V y `Lg[14]` ≈ celda. Decisión pendiente: `Fcorte` 160 kN ≈ 80 bar y 200 kN ≈ 100 bar: **160 kN ya está en la zona del episodio de la soldadura (§2.3)**, bajarlo |
-| Manómetro de la UPH | leer en reposo (tarado real de la limitadora) y durante un recorrido a ±10 V; el modelo da Ps ≈ 100 bar al retraer y la medida ~47 bar |
+| `PID.c` (Formula Node de la v15/v16) | **v17 (2026-11-06): sin duplicar los parámetros.** `ParamPID.c` (segundo Formula Node: `cod`, `Kx`, `Tix`, `Kf` → `P[8]`, `act`) es el único lugar con los valores por defecto y los rangos; `PID.c` ya no los repite y, si `P` llega incompleto, termina el paso en FALLA con `u = 0` (antes inventaba defaults). Verificado: 0 diferencias en 320 000 pasos frente a v16 con `P` válido, 5 600 casos de `ParamPID` idénticos al anterior, y mutaciones detectadas. **Se retiró «Confirmar parámetros» (`conf`)** (2026-11-06): el ensayo arranca en el flanco de subida de INICIAR (`ini ≥ 5`, `inip < 5`); `inio = ini`; sin cambios con `conf` = 1 en 320 000 pasos. **Falta pegar ambos textos en la VI** (VI detenida, UPH apagada). Antes, **v16 (2026-11-05): versión simplificada y legible** (392 líneas, antes 438; cabecera corta con el historial en git, nombres descriptivos en vez de `xsp/xpr/dsp0/F1/x1`, estados y causas con nombre `ST_*`/`CAU_*`, números mágicos con nombre, sin el código muerto del QuantumX; mismos terminales y mismo comportamiento: **720 000 pasos de prueba diferencial sin diferencias**, con y sin el corte por presiones). **Falta pegarla en la VI** (la VI aún tiene la versión anterior; VI detenida y UPH apagada). El rótulo «limitador de presion(Bar) IMPORTANTE» del diagrama es un residuo de las primeras versiones (aclarado por el laboratorio el 2026-11-05): **el único limitador de presión es el del Formula Node, hoy desactivado (`prot_pres_on = 0`)**. Lo siguiente es de la versión anterior: **Actualizado el 2026-11-04** (verificado con 320 000 pasos de prueba diferencial: el controlador es idéntico al anterior; solo cambia la lógica de presiones): convención única **`pa` = cámara A sin vástago (`ai2`), `pb` = cámara B con vástago (`ai3`)**, llegan **en bar reales** (se escalan en el diagrama, antes del nodo: `pa = (V_ai2 − 1.9826)·12.5`, `pb = (V_ai3 − 1.9682)·50`); `Fp = 2.0106·pa − 1.5080·pb` (160/80 mm); `PAmax` = 95 bar; `Lg[12..14]` = pa, pb, Fp. **En la VI (2026-11-04):** los dos escalados están cableados (`ai2`→`pa`, `ai3`→`pb`) y el texto está pegado en el Formula Node (el archivo `.vi` contiene el `PID.c` actual, verificado). **Falta probarla con la UPH en marcha.** El corte por presión sigue **desactivado** (`protPres = 0`); reactivarlo tras comprobar con la UPH en marcha que `Lg[12]`/`Lg[13]` marcan ≈ 34/47 bar a −0.37 V y `Lg[14]` ≈ celda. Decisión pendiente: `Fcorte` 160 kN ≈ 80 bar y 200 kN ≈ 100 bar: **160 kN ya está en la zona del episodio de la soldadura (§2.3)**, bajarlo |
+| Manómetro de la UPH | **leído el 2026-11-04/05**: reposo 96–98 bar, extensión +10 V 95 → ~40, retracción −10/−5/−3/−1 V = 55/85/90/90 bar (§3). Limitadora blanda (empieza a abrir hacia 43 bar, caudal completo a ~100). Falta el tarado nominal de la placa de la UPH y si se puede subir/bajar |
 | Acumulador | buscar placa (volumen, precarga) |
 | Escalas de presión | **bloquea la prueba del diámetro.** Resuelto el 2026-11-04: cableado definitivo (A→`ai2`, B→`ai3`, §2.4) y escalas de hoja de datos con ceros medidos, validadas por la serie de fuerza (offset 0 kN). Ya aplicadas en `params_prensa.m`, `Prensa.m` y `PID.c`; falta aplicarlas en el diagrama de la VI y revisar el log y los archivos de agosto |
 | Fricción de Stribeck, volúmenes muertos | supuestos: identificar con rampas lentas a velocidad constante |
@@ -306,7 +302,7 @@ Cilindro de hasta 200 kN, planta casi sin amortiguamiento (δ_h ≈ 1e-3).
 | `CLAUDE.md` | este documento |
 | `README.md` | portada breve |
 | `.claude/skills/resultados-medidos/SKILL.md` | registro detallado de las mediciones de agosto 2026 (material para el informe) |
-| `labview_control_software/` | VIs v13 (obsoleta: lee fuerza del QuantumX) y **v15** (producción), `GlobalesPrensa.vi`, `TIME.vi`, `PID.c` (código del Formula Node del controlador, para pegar en la VI) |
+| `labview_control_software/` | VIs **v15** (producción) y **v16** (copia de la v15 preparada para pegar `PID.c` v17 y `ParamPID.c`; la v13, que leía la fuerza del QuantumX, se retiró del repositorio el 2026-11-06 y sigue en el historial de git), `GlobalesPrensa.vi`, `TIME.vi`, `PID.c` (código del Formula Node del controlador, para pegar en la VI) y `ParamPID.c` (Formula Node de los parámetros del PID, que alimenta el arreglo `P` de `PID.c`). **Ver el diagrama sin abrir la VI:** `LabVIEWCLI.exe -OperationName CreateComparisonReport -VI1 <v13>.vi -VI2 <v15>.vi -ReportType html -ReportPath <informe>.html -o` (el comando está en `C:\Program Files (x86)\National Instruments\Shared\LabVIEW CLI\`) deja en `<informe>_files/` las imágenes `fp_2.png` (panel) y `bd_2.png` (diagrama completo de la v15, ~10 000 × 4 000 px) y la lista de objetos cambiados; funciona con VIs reales, con `TIME.vi` dio el error 66 |
 | `simulink/` | `params_prensa.m`, `prensa_fluidtek.slx` |
 | `matlab/Prensa.m` | script MATLAB del proyecto |
 | `diagrama_electrico/` | `FLUIDTEK_UPH50.cad` (CADe_SIMU V4.2) y su generador `fluidtek.py` |
